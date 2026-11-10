@@ -42,12 +42,16 @@ class ReviewWordWidgetProvider : AppWidgetProvider() {
             ACTION_NEXT_WORD -> {
                 NativeBridgeStore.advanceToNextWord(context)
             }
+            ACTION_PLAY_AUDIO -> {
+                NativeBridgeStore.playCurrentWordAudio(context)
+            }
         }
     }
 
     companion object {
         const val ACTION_MARK_READ = "com.example.ekiiyou.WIDGET_MARK_READ"
         const val ACTION_NEXT_WORD = "com.example.ekiiyou.WIDGET_NEXT_WORD"
+        const val ACTION_PLAY_AUDIO = "com.example.ekiiyou.WIDGET_PLAY_AUDIO"
 
         fun updateAll(context: Context) {
             val manager = AppWidgetManager.getInstance(context)
@@ -142,6 +146,15 @@ class ReviewWordWidgetProvider : AppWidgetProvider() {
             views.setOnClickPendingIntent(
                 R.id.btn_next_word,
                 PendingIntent.getBroadcast(context, 102, nextIntent, flags)
+            )
+
+            // Play Audio broadcast
+            val playAudioIntent = Intent(context, ReviewWordWidgetProvider::class.java).apply {
+                action = ACTION_PLAY_AUDIO
+            }
+            views.setOnClickPendingIntent(
+                R.id.btn_widget_audio,
+                PendingIntent.getBroadcast(context, 105, playAudioIntent, flags)
             )
 
             // Quick Add launch

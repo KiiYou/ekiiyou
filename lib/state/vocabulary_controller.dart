@@ -44,6 +44,8 @@ class VocabularyController extends ChangeNotifier {
   bool _isAddingWord = false;
   bool _isSyncingPending = false;
   bool _isOffline = false;
+  bool _pendingFloatingEnableAfterPermission = false;
+  bool _pendingShowPopupAfterPermission = false;
   final Set<int> _enrichingIds = {};
   final Set<Future<void>> _enrichmentTasks = {};
 
@@ -99,6 +101,28 @@ class VocabularyController extends ChangeNotifier {
     }
     if (enableConnectivityListener) {
       drainAndApplyNativeReviews();
+      _checkPendingOverlayPermissionOnResume();
+    }
+  }
+
+  Future<void> _checkPendingOverlayPermissionOnResume() async {
+    if (!_pendingFloatingEnableAfterPermission &&
+        !_pendingShowPopupAfterPermission) {
+      return;
+    }
+    final hasPerm = await NativeFeaturesService.instance
+        .checkOverlayPermission();
+    if (!hasPerm) return;
+
+    final shouldEnable = _pendingFloatingEnableAfterPermission;
+    final shouldShow = _pendingShowPopupAfterPermission;
+    _pendingFloatingEnableAfterPermission = false;
+    _pendingShowPopupAfterPermission = false;
+
+    if (shouldEnable) {
+      await setFloatingBubbleEnabled(true);
+    } else if (shouldShow) {
+      await showFloatingPopupNow();
     }
   }
 
@@ -777,10 +801,12 @@ class VocabularyController extends ChangeNotifier {
       final hasPerm = await NativeFeaturesService.instance
           .checkOverlayPermission();
       if (!hasPerm) {
+        _pendingFloatingEnableAfterPermission = true;
         await NativeFeaturesService.instance.requestOverlayPermission();
         return false;
       }
     }
+    _pendingFloatingEnableAfterPermission = false;
 
     _settings = _settings.copyWith(floatingBubbleEnabled: enabled);
     notifyListeners();
@@ -809,9 +835,11 @@ class VocabularyController extends ChangeNotifier {
     final hasPerm = await NativeFeaturesService.instance
         .checkOverlayPermission();
     if (!hasPerm) {
+      _pendingShowPopupAfterPermission = true;
       await NativeFeaturesService.instance.requestOverlayPermission();
       return false;
     }
+    _pendingShowPopupAfterPermission = false;
     _syncNativeState();
     return NativeFeaturesService.instance.showFloatingPopupNow();
   }

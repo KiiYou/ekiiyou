@@ -32,6 +32,16 @@
             android:textStyle="bold" />
 
         <TextView
+            android:id="@+id/btn_flashcard_audio"
+            android:layout_width="28dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/widget_btn_secondary"
+            android:gravity="center"
+            android:text="🔊"
+            android:textSize="11sp" />
+
+        <TextView
             android:id="@+id/flashcard_progress_badge"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

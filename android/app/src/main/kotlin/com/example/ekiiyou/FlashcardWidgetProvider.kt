@@ -29,6 +29,9 @@ class FlashcardWidgetProvider : AppWidgetProvider() {
             ACTION_REVEAL -> {
                 NativeBridgeStore.setFlashcardRevealed(context, true)
             }
+            ACTION_PLAY_AUDIO -> {
+                NativeBridgeStore.playCurrentWordAudio(context)
+            }
             ACTION_REMEMBERED -> {
                 val word = NativeBridgeStore.getCurrentWord(context)
                 val wordId = word?.optInt("id", -1) ?: -1
@@ -66,6 +69,7 @@ class FlashcardWidgetProvider : AppWidgetProvider() {
         const val ACTION_REVEAL = "com.example.ekiiyou.FLASHCARD_REVEAL"
         const val ACTION_REMEMBERED = "com.example.ekiiyou.FLASHCARD_REMEMBERED"
         const val ACTION_FORGOT = "com.example.ekiiyou.FLASHCARD_FORGOT"
+        const val ACTION_PLAY_AUDIO = "com.example.ekiiyou.FLASHCARD_PLAY_AUDIO"
 
         fun updateAll(context: Context) {
             val manager = AppWidgetManager.getInstance(context)
@@ -169,6 +173,14 @@ class FlashcardWidgetProvider : AppWidgetProvider() {
             views.setOnClickPendingIntent(
                 R.id.btn_flashcard_remembered,
                 PendingIntent.getBroadcast(context, 303, rememberedIntent, flags)
+            )
+
+            val playAudioIntent = Intent(context, FlashcardWidgetProvider::class.java).apply {
+                action = ACTION_PLAY_AUDIO
+            }
+            views.setOnClickPendingIntent(
+                R.id.btn_flashcard_audio,
+                PendingIntent.getBroadcast(context, 304, playAudioIntent, flags)
             )
 
             appWidgetManager.updateAppWidget(appWidgetId, views)

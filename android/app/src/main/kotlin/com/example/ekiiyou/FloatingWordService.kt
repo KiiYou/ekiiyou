@@ -8,41 +8,43 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.RadialGradient
+import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.media.MediaPlayer
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
-import android.speech.tts.TextToSpeech
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import java.io.File
-import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.hypot
 
-class FloatingWordService : Service(), TextToSpeech.OnInitListener {
+class FloatingWordService : Service() {
 
     private var windowManager: WindowManager? = null
-    private var bubbleView: View? = null
+    private var bubbleView: BubbleCanvasView? = null
+    private var dismissTargetView: DismissTargetCanvasView? = null
     private var cardView: View? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var cardParams: WindowManager.LayoutParams? = null
 
-    private var badgeDotView: View? = null
     private var cardEnglishWordText: TextView? = null
     private var cardPhoneticText: TextView? = null
     private var cardArabicMeaningText: TextView? = null
@@ -51,10 +53,6 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
     private var cardHeaderTitle: TextView? = null
     private var cardMarkReadBtn: TextView? = null
     private var cardNextWordBtn: TextView? = null
-
-    private var mediaPlayer: MediaPlayer? = null
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
 
     private val handler = Handler(Looper.getMainLooper())
     private val periodicPopupRunnable = object : Runnable {
@@ -66,6 +64,8 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
             NativeBridgeStore.advanceToNextWord(this@FloatingWordService)
             if (Settings.canDrawOverlays(this@FloatingWordService)) {
                 ensureBubbleAdded()
+                bubbleView?.visibility = View.VISIBLE
+                bubbleView?.showBadge = true
                 showExpandedCard()
             }
             updateForegroundNotification()
@@ -78,15 +78,7 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        tts = TextToSpeech(this, this)
         createNotificationChannel()
-    }
-
-    override fun onInit(status: Int) {
-        if (status == TextToSpeech.SUCCESS) {
-            tts?.language = Locale.US
-            ttsReady = true
-        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -106,12 +98,11 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
                 NativeBridgeStore.recordNativeReview(this, wordId, true)
                 Toast.makeText(
                     this,
-                    if (NativeBridgeStore.isArabic(this)) "✓ ممتاز! تم تسجيل قراءة الكلمة" else "✓ Word marked as read!",
+                    if (NativeBridgeStore.isArabic(this)) "✓ أحسنت! تم تسجيل قراءة الكلمة" else "✓ Word marked as read!",
                     Toast.LENGTH_SHORT
                 ).show()
             }
-            refreshCardContent()
-            hideExpandedCard()
+            hideBubbleAndCardUntilNextSchedule()
             updateForegroundNotification()
             return START_STICKY
         }
@@ -121,13 +112,19 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
             return START_NOT_STICKY
         }
 
-        ensureBubbleAdded()
-
         if (action == ACTION_SHOW_POPUP_NOW) {
+            ensureBubbleAdded()
+            bubbleView?.visibility = View.VISIBLE
             showExpandedCard()
         } else if (action == ACTION_REFRESH_CONTENT) {
-            refreshCardContent()
+            if (cardView?.visibility == View.VISIBLE) {
+                refreshCardContent()
+            }
             updateForegroundNotification()
+        } else if (bubbleView == null) {
+            // Initial service start when enabled
+            ensureBubbleAdded()
+            bubbleView?.visibility = View.VISIBLE
         }
 
         schedulePeriodicPopup()
@@ -140,12 +137,31 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
         handler.postDelayed(periodicPopupRunnable, intervalMs)
     }
 
+    /**
+     * Hides both the floating bubble and the expanded word card completely,
+     * and resets the timer so the next word pops up at the next scheduled interval.
+     */
+    private fun hideBubbleAndCardUntilNextSchedule() {
+        hideExpandedCard()
+        hideDismissTarget()
+        bubbleView?.visibility = View.GONE
+        schedulePeriodicPopup()
+    }
+
     private fun dp(value: Int): Int {
         return TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_DIP,
             value.toFloat(),
             resources.displayMetrics
         ).toInt()
+    }
+
+    private fun dpF(value: Float): Float {
+        return TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            value,
+            resources.displayMetrics
+        )
     }
 
     private fun overlayType(): Int {
@@ -160,86 +176,85 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
     private fun ensureBubbleAdded() {
         if (bubbleView != null) return
 
-        val container = FrameLayout(this)
-        val bubbleSize = dp(58)
-
-        val circleBg = GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            intArrayOf(Color.parseColor("#1D4ED8"), Color.parseColor("#0F172A"))
-        ).apply {
-            shape = GradientDrawable.OVAL
-            setStroke(dp(2), Color.parseColor("#60A5FA"))
-        }
-
-        val innerCircle = FrameLayout(this).apply {
-            background = circleBg
-            elevation = dp(8).toFloat()
-        }
-
-        val iconView = ImageView(this).apply {
-            setImageResource(R.mipmap.launcher_icon)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            val pad = dp(10)
-            setPadding(pad, pad, pad, pad)
-        }
-        innerCircle.addView(
-            iconView,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        )
-
-        container.addView(
-            innerCircle,
-            FrameLayout.LayoutParams(bubbleSize, bubbleSize).apply {
-                gravity = Gravity.CENTER
-            }
-        )
-
-        // Green/Blue unread badge dot on top-right of bubble
-        val dot = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#10B981"))
-                setStroke(dp(2), Color.parseColor("#0F172A"))
-            }
-            elevation = dp(10).toFloat()
-        }
-        badgeDotView = dot
-        container.addView(
-            dot,
-            FrameLayout.LayoutParams(dp(16), dp(16)).apply {
-                gravity = Gravity.TOP or Gravity.END
-                topMargin = dp(2)
-                marginEnd = dp(2)
-            }
-        )
+        val bubble = BubbleCanvasView(this)
+        val size = dp(68)
 
         val params = WindowManager.LayoutParams(
-            dp(64),
-            dp(64),
+            size,
+            size,
             overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = resources.displayMetrics.widthPixels - dp(72)
+            x = resources.displayMetrics.widthPixels - dp(74)
             y = resources.displayMetrics.heightPixels / 3
         }
 
-        setupBubbleDragAndClick(container, params)
+        setupBubbleDragAndClick(bubble, params)
 
         try {
-            windowManager?.addView(container, params)
-            bubbleView = container
+            windowManager?.addView(bubble, params)
+            bubbleView = bubble
             bubbleParams = params
         } catch (_: Exception) {
         }
     }
 
-    private fun setupBubbleDragAndClick(view: View, params: WindowManager.LayoutParams) {
+    private fun ensureDismissTargetAdded() {
+        if (dismissTargetView != null) return
+        val target = DismissTargetCanvasView(this).apply {
+            visibility = View.GONE
+        }
+        val size = dp(88)
+        val params = WindowManager.LayoutParams(
+            size,
+            size,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = dp(44)
+        }
+        try {
+            windowManager?.addView(target, params)
+            dismissTargetView = target
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun showDismissTarget(hovered: Boolean) {
+        ensureDismissTargetAdded()
+        dismissTargetView?.let { target ->
+            if (target.visibility != View.VISIBLE) {
+                target.visibility = View.VISIBLE
+            }
+            if (target.isTargetActive != hovered) {
+                target.isTargetActive = hovered
+            }
+        }
+    }
+
+    private fun hideDismissTarget() {
+        dismissTargetView?.apply {
+            isTargetActive = false
+            visibility = View.GONE
+        }
+    }
+
+    private fun isInsideDismissZone(rawX: Float, rawY: Float): Boolean {
+        val metrics = resources.displayMetrics
+        val targetCenterX = metrics.widthPixels / 2f
+        val targetCenterY = metrics.heightPixels - dpF(88f)
+        val dist = hypot((rawX - targetCenterX).toDouble(), (rawY - targetCenterY).toDouble())
+        return dist <= dpF(95f) || rawY >= metrics.heightPixels - dpF(115f)
+    }
+
+    private fun setupBubbleDragAndClick(view: BubbleCanvasView, params: WindowManager.LayoutParams) {
         var initialX = 0
         var initialY = 0
         var initialTouchX = 0f
@@ -254,6 +269,7 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
                     moved = false
+                    view.isPressedState = true
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -261,11 +277,16 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
                     val dy = (event.rawY - initialTouchY).toInt()
                     if (abs(dx) > dp(6) || abs(dy) > dp(6)) {
                         moved = true
+                        if (cardView?.visibility == View.VISIBLE) {
+                            hideExpandedCard()
+                        }
+                        val overDismiss = isInsideDismissZone(event.rawX, event.rawY)
+                        showDismissTarget(overDismiss)
                     }
                     params.x = initialX + dx
                     params.y = (initialY + dy).coerceIn(
-                        dp(36),
-                        resources.displayMetrics.heightPixels - dp(120)
+                        dp(24),
+                        resources.displayMetrics.heightPixels - dp(60)
                     )
                     try {
                         windowManager?.updateViewLayout(view, params)
@@ -273,18 +294,34 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
                     }
                     true
                 }
-                MotionEvent.ACTION_UP -> {
-                    if (!moved) {
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    view.isPressedState = false
+                    val dismissed = moved && isInsideDismissZone(event.rawX, event.rawY)
+                    hideDismissTarget()
+
+                    if (dismissed) {
+                        hideBubbleAndCardUntilNextSchedule()
+                        val msg = if (NativeBridgeStore.isArabic(this@FloatingWordService)) {
+                            "تم إخفاء الفقاعة — ستظهر تلقائياً في موعد الكلمة القادمة"
+                        } else {
+                            "Bubble hidden until the next scheduled word"
+                        }
+                        Toast.makeText(this@FloatingWordService, msg, Toast.LENGTH_SHORT).show()
+                    } else if (!moved) {
                         toggleExpandedCard()
                     } else {
-                        // Snap to nearest horizontal screen edge like Messenger chat head
+                        // Snap smoothly to nearest horizontal screen edge
                         val screenWidth = resources.displayMetrics.widthPixels
                         val mid = screenWidth / 2
                         params.x = if (params.x + view.width / 2 < mid) {
-                            dp(8)
+                            dp(4)
                         } else {
                             screenWidth - dp(72)
                         }
+                        params.y = params.y.coerceIn(
+                            dp(36),
+                            resources.displayMetrics.heightPixels - dp(140)
+                        )
                         try {
                             windowManager?.updateViewLayout(view, params)
                         } catch (_: Exception) {
@@ -308,12 +345,13 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
     private fun showExpandedCard() {
         if (!Settings.canDrawOverlays(this)) return
         ensureBubbleAdded()
+        bubbleView?.visibility = View.VISIBLE
         if (cardView == null) {
             createCardView()
         }
         refreshCardContent()
         cardView?.visibility = View.VISIBLE
-        badgeDotView?.visibility = View.GONE
+        bubbleView?.showBadge = false
     }
 
     private fun hideExpandedCard() {
@@ -323,30 +361,41 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
     private fun createCardView() {
         val isAr = NativeBridgeStore.isArabic(this)
 
+        // Note: NO View.elevation on rootCard to prevent Android WindowManager
+        // from rendering a semi-transparent rectangular box behind rounded corners.
         val rootCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             val pad = dp(16)
             setPadding(pad, pad, pad, pad)
             background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
-                intArrayOf(Color.parseColor("#F70F172A"), Color.parseColor("#F71E293B"))
+                intArrayOf(Color.parseColor("#FA0F172A"), Color.parseColor("#FA1E293B"))
             ).apply {
                 cornerRadius = dp(22).toFloat()
-                setStroke(dp(1), Color.parseColor("#4D60A5FA"))
+                setStroke(dp(1), Color.parseColor("#6660A5FA"))
             }
-            elevation = dp(16).toFloat()
         }
 
-        // 1. Header Row (Logo + Title + Progress Badge + Collapse/Close)
+        // 1. Header Row (Title + Progress Badge + Minimize + Close)
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val logoImg = ImageView(this).apply {
-            setImageResource(R.mipmap.launcher_icon)
+        val brandBadge = TextView(this).apply {
+            text = "Aa"
+            setTextColor(Color.WHITE)
+            textSize = 11f
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.parseColor("#2563EB"), Color.parseColor("#4C1D95"))
+            ).apply {
+                shape = GradientDrawable.OVAL
+            }
         }
-        headerRow.addView(logoImg, LinearLayout.LayoutParams(dp(22), dp(22)))
+        headerRow.addView(brandBadge, LinearLayout.LayoutParams(dp(24), dp(24)))
 
         val headerTitle = TextView(this).apply {
             text = if (isAr) "EKiiYou • بطاقة كلمة ذكية" else "EKiiYou • Word Popup"
@@ -377,10 +426,11 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
         cardProgressBadge = progressBadge
         headerRow.addView(progressBadge)
 
-        val closeBtn = TextView(this).apply {
-            text = "✕"
+        // Minimize to bubble button (—)
+        val minimizeBtn = TextView(this).apply {
+            text = "—"
             setTextColor(Color.parseColor("#CBD5E1"))
-            textSize = 14f
+            textSize = 13f
             gravity = Gravity.CENTER
             setTypeface(typeface, Typeface.BOLD)
             val lp = LinearLayout.LayoutParams(dp(28), dp(28))
@@ -392,6 +442,26 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
             }
             setOnClickListener {
                 hideExpandedCard()
+            }
+        }
+        headerRow.addView(minimizeBtn)
+
+        // Close until next schedule button (✕)
+        val closeBtn = TextView(this).apply {
+            text = "✕"
+            setTextColor(Color.parseColor("#FCA5A5"))
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTypeface(typeface, Typeface.BOLD)
+            val lp = LinearLayout.LayoutParams(dp(28), dp(28))
+            lp.marginStart = dp(6)
+            layoutParams = lp
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#33EF4444"))
+            }
+            setOnClickListener {
+                hideBubbleAndCardUntilNextSchedule()
             }
         }
         headerRow.addView(closeBtn)
@@ -460,7 +530,7 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
                 setStroke(dp(1), Color.parseColor("#60A5FA"))
             }
             setOnClickListener {
-                playCurrentWordAudio()
+                NativeBridgeStore.playCurrentWordAudio(this@FloatingWordService)
             }
         }
         wordRow.addView(speakerBtn)
@@ -530,16 +600,17 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
                 if (wordId > 0) {
                     NativeBridgeStore.recordNativeReview(this@FloatingWordService, wordId, true)
                     val msg = if (NativeBridgeStore.isArabic(this@FloatingWordService)) {
-                        "✓ أحسنت! تم تسجيل قراءة الكلمة"
+                        "✓ أحسنت! تم تسجيل القراءة وستظهر الكلمة القادمة في موعدها"
                     } else {
-                        "✓ Great job! Word marked as read"
+                        "✓ Read recorded! Next word will appear on schedule"
                     }
                     Toast.makeText(this@FloatingWordService, msg, Toast.LENGTH_SHORT).show()
                 } else {
                     NativeBridgeStore.advanceToNextWord(this@FloatingWordService)
                 }
                 updateForegroundNotification()
-                hideExpandedCard()
+                // Hide both the card and the bubble until the next scheduled word time!
+                hideBubbleAndCardUntilNextSchedule()
             }
         }
         cardMarkReadBtn = markReadBtn
@@ -582,6 +653,32 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             y = dp(96)
+        }
+
+        // Allow dragging the expanded card vertically by its header row
+        var cardInitialY = 0
+        var cardInitialTouchY = 0f
+        headerRow.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    cardInitialY = params.y
+                    cardInitialTouchY = event.rawY
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dy = (event.rawY - cardInitialTouchY).toInt()
+                    params.y = (cardInitialY + dy).coerceIn(
+                        dp(40),
+                        resources.displayMetrics.heightPixels - dp(260)
+                    )
+                    try {
+                        windowManager?.updateViewLayout(rootCard, params)
+                    } catch (_: Exception) {
+                    }
+                    true
+                }
+                else -> false
+            }
         }
 
         try {
@@ -633,32 +730,6 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
             cardArabicMeaningText?.text =
                 if (isAr) "افتح تطبيق EKiiYou لإضافة كلمات للمراجعة" else "Open EKiiYou to add vocabulary words"
             cardDefinitionText?.text = "EKiiYou Smart Vocabulary Notebook"
-        }
-    }
-
-    private fun playCurrentWordAudio() {
-        val wordObj = NativeBridgeStore.getCurrentWord(this) ?: return
-        val wordText = wordObj.optString("word", "").trim()
-        val localPath = wordObj.optString("audioLocalPath", "").trim()
-
-        if (localPath.isNotBlank()) {
-            val file = File(localPath)
-            if (file.exists() && file.length() > 256) {
-                try {
-                    mediaPlayer?.release()
-                    mediaPlayer = MediaPlayer().apply {
-                        setDataSource(file.absolutePath)
-                        prepare()
-                        start()
-                    }
-                    return
-                } catch (_: Exception) {
-                }
-            }
-        }
-
-        if (wordText.isNotBlank() && ttsReady) {
-            tts?.speak(wordText, TextToSpeech.QUEUE_FLUSH, null, "floating_word_tts")
         }
     }
 
@@ -769,19 +840,238 @@ class FloatingWordService : Service(), TextToSpeech.OnInitListener {
         } catch (_: Exception) {
         }
         try {
+            dismissTargetView?.let { windowManager?.removeView(it) }
+        } catch (_: Exception) {
+        }
+        try {
             cardView?.let { windowManager?.removeView(it) }
         } catch (_: Exception) {
         }
         bubbleView = null
+        dismissTargetView = null
         cardView = null
-        mediaPlayer?.release()
-        mediaPlayer = null
-        tts?.stop()
-        tts?.shutdown()
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * Pure Canvas-rendered circular Messenger-style chat head bubble.
+     * Draws a soft radial circular shadow, rich royal-blue/violet gradient sphere,
+     * glass highlight, glowing ring, crisp vector "Aa" + open book emblem, and unread dot
+     * with ZERO rectangular background or square WindowManager elevation artifacts.
+     */
+    private inner class BubbleCanvasView(context: Context) : View(context) {
+        private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val glassPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#22FFFFFF")
+            style = Paint.Style.FILL
+        }
+        private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dpF(2.2f)
+        }
+        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textSize = dpF(17.5f)
+        }
+        private val bookPath = Path()
+        private val bookPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#93C5FD")
+            style = Paint.Style.STROKE
+            strokeWidth = dpF(2.2f)
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        private val sparklePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#FBBF24")
+            style = Paint.Style.FILL
+        }
+        private val badgeFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#10B981")
+            style = Paint.Style.FILL
+        }
+        private val badgeStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#0F172A")
+            style = Paint.Style.STROKE
+            strokeWidth = dpF(2f)
+        }
+
+        var showBadge: Boolean = true
+            set(value) {
+                field = value
+                invalidate()
+            }
+
+        var isPressedState: Boolean = false
+            set(value) {
+                field = value
+                invalidate()
+            }
+
+        init {
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val cx = width / 2f
+            val cy = height / 2f
+            val scale = if (isPressedState) 0.93f else 1.0f
+            val r = dpF(25f) * scale
+
+            // 1. Soft 100% circular radial shadow (fades to transparent inside view bounds)
+            val shadowRadius = r + dpF(7f)
+            shadowPaint.shader = RadialGradient(
+                cx,
+                cy + dpF(2.5f),
+                shadowRadius,
+                intArrayOf(
+                    Color.parseColor("#660F172A"),
+                    Color.parseColor("#290F172A"),
+                    Color.TRANSPARENT
+                ),
+                floatArrayOf(0f, 0.72f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(cx, cy + dpF(2.5f), shadowRadius, shadowPaint)
+
+            // 2. Main sphere gradient (Royal Blue -> Deep Indigo/Violet)
+            bodyPaint.shader = LinearGradient(
+                cx - r,
+                cy - r,
+                cx + r,
+                cy + r,
+                intArrayOf(
+                    Color.parseColor("#2563EB"),
+                    Color.parseColor("#1D4ED8"),
+                    Color.parseColor("#4C1D95")
+                ),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(cx, cy, r, bodyPaint)
+
+            // 3. Top-left subtle glass reflection
+            canvas.drawCircle(cx - r * 0.22f, cy - r * 0.28f, r * 0.58f, glassPaint)
+
+            // 4. Crisp outer gradient ring
+            ringPaint.shader = LinearGradient(
+                cx - r,
+                cy - r,
+                cx + r,
+                cy + r,
+                Color.parseColor("#93C5FD"),
+                Color.parseColor("#C4B5FD"),
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(cx, cy, r - dpF(1.1f), ringPaint)
+
+            // 5. Golden sparkle accent dot inside top-right
+            canvas.drawCircle(cx + r * 0.42f, cy - r * 0.42f, dpF(2.3f), sparklePaint)
+
+            // 6. Crisp "Aa" typography in the center
+            val textY = cy + dpF(2f)
+            canvas.drawText("Aa", cx, textY, textPaint)
+
+            // 7. Open book curved pages motif beneath "Aa"
+            val bookY = cy + dpF(9.5f)
+            val wing = dpF(11f)
+            bookPath.reset()
+            bookPath.moveTo(cx - wing, bookY - dpF(1.5f))
+            bookPath.quadTo(cx - wing * 0.45f, bookY + dpF(2.5f), cx, bookY + dpF(0.5f))
+            bookPath.quadTo(cx + wing * 0.45f, bookY + dpF(2.5f), cx + wing, bookY - dpF(1.5f))
+            canvas.drawPath(bookPath, bookPaint)
+
+            // 8. Unread emerald badge dot on the top-right rim
+            if (showBadge) {
+                val bx = cx + r * 0.71f
+                val by = cy - r * 0.71f
+                val br = dpF(6f)
+                canvas.drawCircle(bx, by, br, badgeFillPaint)
+                canvas.drawCircle(bx, by, br, badgeStrokePaint)
+            }
+        }
+    }
+
+    /**
+     * Messenger-style bottom "✕" drag-to-dismiss target circle.
+     * Grows and turns vibrant red when the user drags the floating bubble over it.
+     */
+    private inner class DismissTargetCanvasView(context: Context) : View(context) {
+        private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val circlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+        private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dpF(2f)
+        }
+        private val crossPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = dpF(2.6f)
+            strokeCap = Paint.Cap.ROUND
+        }
+
+        var isTargetActive: Boolean = false
+            set(value) {
+                field = value
+                invalidate()
+            }
+
+        init {
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val cx = width / 2f
+            val cy = height / 2f
+            val r = if (isTargetActive) dpF(32f) else dpF(26f)
+
+            val shadowRadius = r + dpF(8f)
+            shadowPaint.shader = RadialGradient(
+                cx,
+                cy,
+                shadowRadius,
+                intArrayOf(
+                    if (isTargetActive) Color.parseColor("#88EF4444") else Color.parseColor("#660F172A"),
+                    Color.TRANSPARENT
+                ),
+                floatArrayOf(0.5f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(cx, cy, shadowRadius, shadowPaint)
+
+            circlePaint.color =
+                if (isTargetActive) Color.parseColor("#EEEF4444") else Color.parseColor("#D90F172A")
+            canvas.drawCircle(cx, cy, r, circlePaint)
+
+            borderPaint.color =
+                if (isTargetActive) Color.WHITE else Color.parseColor("#99F87171")
+            canvas.drawCircle(cx, cy, r - dpF(1f), borderPaint)
+
+            val crossOffset = if (isTargetActive) dpF(8.5f) else dpF(7f)
+            canvas.drawLine(
+                cx - crossOffset,
+                cy - crossOffset,
+                cx + crossOffset,
+                cy + crossOffset,
+                crossPaint
+            )
+            canvas.drawLine(
+                cx + crossOffset,
+                cy - crossOffset,
+                cx - crossOffset,
+                cy + crossOffset,
+                crossPaint
+            )
+        }
+    }
 
     companion object {
         private const val CHANNEL_ID = "ekiiyou_floating_bubble_channel"

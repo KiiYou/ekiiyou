@@ -55,6 +55,7 @@
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="com.example.ekiiyou.WIDGET_MARK_READ" />
                 <action android:name="com.example.ekiiyou.WIDGET_NEXT_WORD" />
+                <action android:name="com.example.ekiiyou.WIDGET_PLAY_AUDIO" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
@@ -84,10 +85,23 @@
                 <action android:name="com.example.ekiiyou.FLASHCARD_REVEAL" />
                 <action android:name="com.example.ekiiyou.FLASHCARD_REMEMBERED" />
                 <action android:name="com.example.ekiiyou.FLASHCARD_FORGOT" />
+                <action android:name="com.example.ekiiyou.FLASHCARD_PLAY_AUDIO" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_flashcard_info" />
+        </receiver>
+
+        <!-- Restore Floating Word Bubble and refresh Home Screen Widgets after reboot or app update -->
+        <receiver
+            android:name=".FloatingBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
         </receiver>
 
         <!-- flutter_local_notifications: deliver scheduled reminders and restore them after reboot -->
