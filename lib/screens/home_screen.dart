@@ -10,11 +10,13 @@ import 'word_details_screen.dart';
 class HomeScreen extends StatelessWidget {
   final VocabularyController controller;
   final VoidCallback onNavigateToMyWords;
+  final VoidCallback? onNavigateToSettings;
 
   const HomeScreen({
     super.key,
     required this.controller,
     required this.onNavigateToMyWords,
+    this.onNavigateToSettings,
   });
 
   Future<void> _openAddWord(BuildContext context) async {
@@ -394,6 +396,105 @@ class HomeScreen extends StatelessWidget {
               ),
             ),
           ),
+
+        const SizedBox(height: 14),
+
+        // 6. Smart Floating Bubble & Home Widgets Quick Card
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF5B21B6).withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.bubble_chart_rounded,
+                        color: Color(0xFF5B21B6),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            strings.smartFloatingAndWidgetsSection,
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            strings.floatingBubbleSubtitle,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        onPressed: () async {
+                          final ok = await controller.showFloatingPopupNow();
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                ok
+                                    ? strings.floatingPopupShownToast
+                                    : strings.overlayPermissionNeededMessage,
+                              ),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.chat_bubble_rounded, size: 17),
+                        label: Text(
+                          strings.testFloatingPopupNow,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (onNavigateToSettings != null) ...[
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        onPressed: onNavigateToSettings,
+                        icon: const Icon(Icons.widgets_rounded, size: 17),
+                        label: Text(
+                          strings.pinWidgetButton,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }

@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
 
     <application
         android:label="EKiiYou"
@@ -31,6 +34,62 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
+        <!-- Messenger-style Floating Word Bubble & Popup Service -->
+        <service
+            android:name=".FloatingWordService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Displays user-enabled floating vocabulary learning bubble and periodic word review popup" />
+        </service>
+
+        <!-- Home Screen Widget 1: Word Review Card -->
+        <receiver
+            android:name=".ReviewWordWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_review_word_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.ekiiyou.WIDGET_MARK_READ" />
+                <action android:name="com.example.ekiiyou.WIDGET_NEXT_WORD" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_review_word_info" />
+        </receiver>
+
+        <!-- Home Screen Widget 2: Quick Add & Progress Bar -->
+        <receiver
+            android:name=".QuickAddWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_quick_add_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_quick_add_info" />
+        </receiver>
+
+        <!-- Home Screen Widget 3: Interactive Flashcard Quiz -->
+        <receiver
+            android:name=".FlashcardWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_flashcard_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.ekiiyou.FLASHCARD_REVEAL" />
+                <action android:name="com.example.ekiiyou.FLASHCARD_REMEMBERED" />
+                <action android:name="com.example.ekiiyou.FLASHCARD_FORGOT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_flashcard_info" />
+        </receiver>
+
         <!-- flutter_local_notifications: deliver scheduled reminders and restore them after reboot -->
         <receiver
             android:exported="false"

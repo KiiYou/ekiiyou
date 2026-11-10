@@ -253,6 +253,75 @@ class AppStrings {
       ? 'بيانات النسخة الاحتياطية غير صالحة'
       : 'Invalid backup JSON format';
 
+  // Floating Bubble & Home Screen Widgets
+  String get smartFloatingAndWidgetsSection => isAr
+      ? 'النافذة العائمة وإضافات الشاشة الرئيسية'
+      : 'Floating Word Popup & Home Widgets';
+  String get floatingBubbleTitle => isAr
+      ? 'النافذة العائمة الذكية (مثل الماسنجر)'
+      : 'Smart Floating Word Bubble';
+  String get floatingBubbleSubtitle => isAr
+      ? 'تظهر فقاعة عائمة بالكلمة ومعناها على مدار اليوم ويمكنك الضغط على (✓ قرأتها) مباشرة'
+      : 'Shows a Messenger-style floating word popup throughout the day with a one-tap ✓ Read button';
+  String get floatingIntervalLabel => isAr
+      ? 'تكرار ظهور الكلمة العائمة'
+      : 'Popup Interval';
+  String floatingIntervalOption(int minutes) {
+    if (minutes < 60) {
+      return isAr ? 'كل $minutes د' : '${minutes}m';
+    }
+    final hours = minutes ~/ 60;
+    if (hours == 1) {
+      return isAr ? 'كل ساعة' : '1 hr';
+    }
+    if (hours == 2) {
+      return isAr ? 'كل ساعتين' : '2 hrs';
+    }
+    return isAr ? 'كل $hours ساعات' : '$hours hrs';
+  }
+
+  String get testFloatingPopupNow => isAr
+      ? 'إظهار البطاقة العائمة الآن'
+      : 'Show Floating Popup Now';
+  String get overlayPermissionNeededMessage => isAr
+      ? 'يرجى السماح بإذن "الظهور فوق التطبيقات الأخرى" لتفعيل فقاعة الكلمات العائمة.'
+      : 'Please grant "Display over other apps" permission to enable the floating word bubble.';
+  String get floatingPopupShownToast => isAr
+      ? 'تم إظهار فقاعة الكلمة العائمة على الشاشة! اسحبها أو اضغط عليها.'
+      : 'Floating word popup is now active on your screen!';
+
+  String get homeWidgetsSectionTitle => isAr
+      ? 'إضافات الشاشة الرئيسية (Widgets)'
+      : 'Home Screen Widgets';
+  String get homeWidgetsSectionSubtitle => isAr
+      ? 'ثبّت إضافات تفاعلية على شاشة هاتفك الرئيسية واسحبها في المكان الذي تفضله'
+      : 'Pin interactive widgets to your phone Home Screen and drag them anywhere';
+  String get widgetReviewCardTitle => isAr
+      ? 'وِدجت مراجعة الكلمة'
+      : 'Word Review Widget';
+  String get widgetReviewCardDesc => isAr
+      ? 'يعرض الكلمة ومعناها مع زر (✓ قرأتها) وزر الكلمة التالية وزر إضافة سريع'
+      : 'Shows word & Arabic meaning with ✓ Read, Next Word, and Quick Add buttons';
+  String get widgetQuickAddTitle => isAr
+      ? 'وِدجت الإضافة السريعة والتقدم'
+      : 'Quick Add & Progress Widget';
+  String get widgetQuickAddDesc => isAr
+      ? 'يعرض تقدمك اليومي مع زر إضافة كلمة فوري وزر بدء المراجعة'
+      : 'Displays daily progress with one-tap Add Word and Start Review buttons';
+  String get widgetFlashcardTitle => isAr
+      ? 'وِدجت اختبر نفسك (Flashcard)'
+      : 'Interactive Flashcard Widget';
+  String get widgetFlashcardDesc => isAr
+      ? 'يعرض الكلمة ويكشف المعنى عند الضغط لتجيب (تذكرتها / نسيتها) من الشاشة الرئيسية'
+      : 'Flip the card & answer Remembered / Forgot directly on your Home Screen';
+  String get pinWidgetButton => isAr ? 'تثبيت للشاشة' : 'Pin Widget';
+  String get widgetPinRequestedToast => isAr
+      ? 'تم إرسال طلب إضافة الوِدجت للشاشة الرئيسية! يمكنك أيضاً إضافته بالضغط مطولاً على شاشة الهاتف.'
+      : 'Widget pin requested! You can also add it by long-pressing your Home Screen.';
+  String get widgetManualAddHint => isAr
+      ? 'ملاحظة: يمكنك أيضاً الضغط مطولاً على أي مكان فارغ في شاشة الهاتف الرئيسية ثم اختيار (الإضافات / Widgets) وسحب وِدجت EKiiYou للمكان الذي تحبه.'
+      : 'Tip: You can also long-press an empty area on your phone Home Screen, tap Widgets, and drag any EKiiYou widget anywhere you like.';
+
   String wordAddedToast(
     String word,
     InformationStatus status, {

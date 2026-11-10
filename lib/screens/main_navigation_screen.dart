@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../services/native_features_service.dart';
 import '../state/vocabulary_controller.dart';
+import '../widgets/add_edit_word_sheet.dart';
+import 'daily_review_screen.dart';
 import 'home_screen.dart';
 import 'my_words_screen.dart';
 import 'settings_screen.dart';
+import 'word_details_screen.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   final VocabularyController controller;
@@ -22,10 +26,19 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (widget.controller.enableConnectivityListener) {
+      NativeFeaturesService.instance.onLaunchAction = _handleLaunchAction;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _checkInitialLaunchAction();
+      });
+    }
   }
 
   @override
   void dispose() {
+    if (NativeFeaturesService.instance.onLaunchAction == _handleLaunchAction) {
+      NativeFeaturesService.instance.onLaunchAction = null;
+    }
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -34,6 +47,80 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       widget.controller.checkDayRollover();
+    }
+  }
+
+  Future<void> _checkInitialLaunchAction() async {
+    final action = await NativeFeaturesService.instance.consumeLaunchAction();
+    if (action != null && mounted) {
+      _handleLaunchAction(action);
+    }
+  }
+
+  Future<void> _handleLaunchAction(NativeLaunchAction action) async {
+    if (!mounted) return;
+    switch (action.action) {
+      case 'quick_add':
+        setState(() => _selectedIndex = 0);
+        final result = await AddEditWordSheet.show(
+          context,
+          controller: widget.controller,
+        );
+        if (result != null && mounted) {
+          if (result.wasDuplicateOpened && result.word.id != null) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => WordDetailsScreen(
+                  controller: widget.controller,
+                  wordId: result.word.id!,
+                  initialWord: result.word,
+                ),
+              ),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  widget.controller.strings.wordAddedToast(
+                    result.word.word,
+                    result.word.informationStatus,
+                    isOffline: widget.controller.isOffline,
+                  ),
+                ),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+        }
+        break;
+      case 'start_review':
+        setState(() => _selectedIndex = 0);
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            fullscreenDialog: true,
+            builder: (_) => DailyReviewScreen(controller: widget.controller),
+          ),
+        );
+        break;
+      case 'open_word':
+        final wordId = action.wordId;
+        if (wordId != null && wordId > 0) {
+          final match = widget.controller.allWords
+              .where((w) => w.id == wordId)
+              .firstOrNull;
+          if (match != null) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => WordDetailsScreen(
+                  controller: widget.controller,
+                  wordId: wordId,
+                  initialWord: match,
+                ),
+              ),
+            );
+          }
+        }
+        break;
     }
   }
 
@@ -60,6 +147,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
           HomeScreen(
             controller: widget.controller,
             onNavigateToMyWords: () => _navigateToTab(1),
+            onNavigateToSettings: () => _navigateToTab(2),
           ),
           MyWordsScreen(controller: widget.controller),
           SettingsScreen(controller: widget.controller),

@@ -9,6 +9,8 @@ class AppSettings {
   final int reminderMinute;
   final String languageCode; // 'ar' or 'en'
   final ThemeMode themeMode;
+  final bool floatingBubbleEnabled;
+  final int floatingIntervalMinutes;
 
   const AppSettings({
     this.dailyReviewTarget = 10,
@@ -17,6 +19,8 @@ class AppSettings {
     this.reminderMinute = 0,
     this.languageCode = 'ar', // Default Arabic RTL with English switching
     this.themeMode = ThemeMode.system,
+    this.floatingBubbleEnabled = false,
+    this.floatingIntervalMinutes = 60,
   });
 
   TimeOfDay get reminderTime =>
@@ -31,6 +35,8 @@ class AppSettings {
     int? reminderMinute,
     String? languageCode,
     ThemeMode? themeMode,
+    bool? floatingBubbleEnabled,
+    int? floatingIntervalMinutes,
   }) {
     return AppSettings(
       dailyReviewTarget: dailyReviewTarget ?? this.dailyReviewTarget,
@@ -39,6 +45,10 @@ class AppSettings {
       reminderMinute: reminderMinute ?? this.reminderMinute,
       languageCode: languageCode ?? this.languageCode,
       themeMode: themeMode ?? this.themeMode,
+      floatingBubbleEnabled:
+          floatingBubbleEnabled ?? this.floatingBubbleEnabled,
+      floatingIntervalMinutes:
+          floatingIntervalMinutes ?? this.floatingIntervalMinutes,
     );
   }
 }

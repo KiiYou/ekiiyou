@@ -10,6 +10,7 @@ import '../models/app_settings.dart';
 import '../models/vocabulary_word.dart';
 import '../services/audio_service.dart';
 import '../services/dictionary_service.dart';
+import '../services/native_features_service.dart';
 import '../services/notification_service.dart';
 import '../services/spaced_repetition_service.dart';
 
@@ -89,10 +90,15 @@ class VocabularyController extends ChangeNotifier {
   Set<int> get reviewedTodayIds => Set.unmodifiable(_reviewedTodayIds);
 
   /// Resets the daily counter if the calendar day has rolled over (e.g. when
-  /// the app resumes after midnight).
+  /// the app resumes after midnight) and syncs any reviews made from Android
+  /// Home Screen widgets or the floating popup bubble.
   void checkDayRollover() {
     if (_ensureCurrentDayKey()) {
       notifyListeners();
+      _syncNativeState();
+    }
+    if (enableConnectivityListener) {
+      drainAndApplyNativeReviews();
     }
   }
 
@@ -104,6 +110,10 @@ class VocabularyController extends ChangeNotifier {
     notifyListeners();
 
     if (enableConnectivityListener) {
+      NativeFeaturesService.instance.onNativeReviewRecorded = () {
+        drainAndApplyNativeReviews();
+      };
+      await drainAndApplyNativeReviews();
       _audioService.warmup();
       _setupConnectivityMonitoring();
       _precacheMissingAudioFiles();
@@ -111,6 +121,52 @@ class VocabularyController extends ChangeNotifier {
         _reverifyReminderAtStartup();
       }
     }
+  }
+
+  /// Drains any word reviews recorded natively from the Home Screen widgets
+  /// or the floating word popup and applies them to SQLite & today's counter.
+  Future<void> drainAndApplyNativeReviews() async {
+    final events = await NativeFeaturesService.instance.drainPendingReviews();
+    if (events.isEmpty) return;
+
+    _ensureCurrentDayKey();
+    for (final event in events) {
+      final existing = await _dbHelper.getWordById(event.wordId);
+      if (existing != null) {
+        final updated = _spacedRepetition.recordReview(
+          word: existing,
+          remembered: event.remembered,
+          isPractice: false,
+        );
+        await _dbHelper.updateWord(updated);
+        _reviewedTodayIds.add(event.wordId);
+      }
+    }
+    await _persistReviewedToday();
+    await refreshWords();
+  }
+
+  void _syncNativeState() {
+    if (!enableConnectivityListener) return;
+    final dueWords = _spacedRepetition.selectDueWords(
+      allWords: _allWords,
+      limit: 30,
+    );
+    final dueIds = dueWords.map((w) => w.id).toSet();
+    final extraPractice = _spacedRepetition
+        .selectPracticeWords(allWords: _allWords, limit: 30)
+        .where((w) => !dueIds.contains(w.id));
+    final queue = <VocabularyWord>[...dueWords, ...extraPractice];
+
+    NativeFeaturesService.instance.syncState(
+      wordsQueue: queue,
+      reviewedToday: _reviewedTodayIds.length,
+      dailyTarget: _settings.dailyReviewTarget,
+      totalWords: _allWords.length,
+      languageCode: _settings.languageCode,
+      floatingEnabled: _settings.floatingBubbleEnabled,
+      floatingIntervalMinutes: _settings.floatingIntervalMinutes,
+    );
   }
 
   /// Silently downloads and caches local MP3 files for any previously saved
@@ -174,6 +230,10 @@ class VocabularyController extends ChangeNotifier {
     final reminderMinute = prefs.getInt('reminder_minute') ?? 0;
     final languageCode = prefs.getString('language_code') ?? 'ar';
     final themeIndex = prefs.getInt('theme_mode') ?? ThemeMode.system.index;
+    final floatingBubbleEnabled =
+        prefs.getBool('floating_bubble_enabled') ?? false;
+    final floatingIntervalMinutes =
+        prefs.getInt('floating_interval_minutes') ?? 60;
 
     _settings = AppSettings(
       dailyReviewTarget: dailyTarget.clamp(1, 200),
@@ -185,6 +245,8 @@ class VocabularyController extends ChangeNotifier {
           : 'ar',
       themeMode:
           ThemeMode.values[themeIndex.clamp(0, ThemeMode.values.length - 1)],
+      floatingBubbleEnabled: floatingBubbleEnabled,
+      floatingIntervalMinutes: floatingIntervalMinutes.clamp(15, 720),
     );
 
     _currentDayKey = _todayKey();
@@ -251,6 +313,7 @@ class VocabularyController extends ChangeNotifier {
     _allWords = await _dbHelper.getAllWords(sortOrder: SortOrder.newest);
     _applySearchAndSort();
     notifyListeners();
+    _syncNativeState();
   }
 
   void _applySearchAndSort() {
@@ -643,6 +706,7 @@ class VocabularyController extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('daily_review_target', clamped);
+    _syncNativeState();
   }
 
   Future<ReminderScheduleResult> setReminderEnabled(bool enabled) async {
@@ -693,6 +757,7 @@ class VocabularyController extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('language_code', languageCode);
+    _syncNativeState();
 
     if (_settings.reminderEnabled) {
       await _notificationService.scheduleDailyReminder(
@@ -702,6 +767,58 @@ class VocabularyController extends ChangeNotifier {
         body: strings.notificationBody,
       );
     }
+  }
+
+  /// Enables or disables the Messenger-style floating word bubble.
+  /// Returns `false` if overlay permission is missing (and opens the system
+  /// permission page so the user can grant it).
+  Future<bool> setFloatingBubbleEnabled(bool enabled) async {
+    if (enabled && NativeFeaturesService.instance.isSupported) {
+      final hasPerm = await NativeFeaturesService.instance
+          .checkOverlayPermission();
+      if (!hasPerm) {
+        await NativeFeaturesService.instance.requestOverlayPermission();
+        return false;
+      }
+    }
+
+    _settings = _settings.copyWith(floatingBubbleEnabled: enabled);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('floating_bubble_enabled', enabled);
+    _syncNativeState();
+    if (enabled) {
+      await NativeFeaturesService.instance.showFloatingPopupNow();
+    }
+    return true;
+  }
+
+  Future<void> updateFloatingIntervalMinutes(int minutes) async {
+    final clamped = minutes.clamp(15, 720);
+    _settings = _settings.copyWith(floatingIntervalMinutes: clamped);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('floating_interval_minutes', clamped);
+    _syncNativeState();
+  }
+
+  /// Immediately displays the Messenger-style floating word popup on screen.
+  /// Returns `false` if overlay permission is required.
+  Future<bool> showFloatingPopupNow() async {
+    if (!NativeFeaturesService.instance.isSupported) return false;
+    final hasPerm = await NativeFeaturesService.instance
+        .checkOverlayPermission();
+    if (!hasPerm) {
+      await NativeFeaturesService.instance.requestOverlayPermission();
+      return false;
+    }
+    _syncNativeState();
+    return NativeFeaturesService.instance.showFloatingPopupNow();
+  }
+
+  Future<bool> requestPinHomeWidget(String widgetType) async {
+    _syncNativeState();
+    return NativeFeaturesService.instance.requestPinWidget(widgetType);
   }
 
   Future<void> updateThemeMode(ThemeMode mode) async {

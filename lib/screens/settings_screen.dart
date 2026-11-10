@@ -10,6 +10,7 @@ class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, required this.controller});
 
   static const List<int> _presetTargets = [5, 10, 15, 20];
+  static const List<int> _floatingIntervals = [30, 60, 120, 240];
 
   Future<void> _showCustomTargetDialog(BuildContext context) async {
     final strings = controller.strings;
@@ -426,6 +427,254 @@ class SettingsScreen extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 24),
+
+        // 2b. Messenger-style Floating Word Bubble & Home Screen Widgets
+        _SectionHeader(
+          icon: Icons.bubble_chart_rounded,
+          title: strings.smartFloatingAndWidgetsSection,
+        ),
+        const SizedBox(height: 10),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    const _SettingIconBadge(
+                      icon: Icons.chat_bubble_rounded,
+                      color: Color(0xFF10B981),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            strings.floatingBubbleTitle,
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            strings.floatingBubbleSubtitle,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Switch(
+                      value: settings.floatingBubbleEnabled,
+                      onChanged: (enabled) async {
+                        final ok = await controller.setFloatingBubbleEnabled(
+                          enabled,
+                        );
+                        if (!ok && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                strings.overlayPermissionNeededMessage,
+                              ),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  strings.floatingIntervalLabel,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    for (int i = 0; i < _floatingIntervals.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 8),
+                      Expanded(
+                        child: _TargetOptionTile(
+                          label: strings.floatingIntervalOption(
+                            _floatingIntervals[i],
+                          ),
+                          selected:
+                              settings.floatingIntervalMinutes ==
+                              _floatingIntervals[i],
+                          onTap: () => controller.updateFloatingIntervalMinutes(
+                            _floatingIntervals[i],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 14),
+                FilledButton.tonalIcon(
+                  onPressed: () async {
+                    final ok = await controller.showFloatingPopupNow();
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          ok
+                              ? strings.floatingPopupShownToast
+                              : strings.overlayPermissionNeededMessage,
+                        ),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                  label: Text(
+                    strings.testFloatingPopupNow,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        // 2c. Pin Android Home Screen Widgets Card
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    _SettingIconBadge(
+                      icon: Icons.widgets_rounded,
+                      color: colorScheme.primary,
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            strings.homeWidgetsSectionTitle,
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            strings.homeWidgetsSectionSubtitle,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                _HomeWidgetPinTile(
+                  icon: Icons.auto_stories_rounded,
+                  iconColor: const Color(0xFF1D4ED8),
+                  title: strings.widgetReviewCardTitle,
+                  subtitle: strings.widgetReviewCardDesc,
+                  buttonLabel: strings.pinWidgetButton,
+                  onPin: () async {
+                    await controller.requestPinHomeWidget('review');
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(strings.widgetPinRequestedToast),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
+                  },
+                ),
+                const Divider(height: 16),
+                _HomeWidgetPinTile(
+                  icon: Icons.add_box_rounded,
+                  iconColor: const Color(0xFF10B981),
+                  title: strings.widgetQuickAddTitle,
+                  subtitle: strings.widgetQuickAddDesc,
+                  buttonLabel: strings.pinWidgetButton,
+                  onPin: () async {
+                    await controller.requestPinHomeWidget('quick_add');
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(strings.widgetPinRequestedToast),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
+                  },
+                ),
+                const Divider(height: 16),
+                _HomeWidgetPinTile(
+                  icon: Icons.quiz_rounded,
+                  iconColor: const Color(0xFF5B21B6),
+                  title: strings.widgetFlashcardTitle,
+                  subtitle: strings.widgetFlashcardDesc,
+                  buttonLabel: strings.pinWidgetButton,
+                  onPin: () async {
+                    await controller.requestPinHomeWidget('flashcard');
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(strings.widgetPinRequestedToast),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHighest.withValues(
+                      alpha: 0.4,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.lightbulb_outline_rounded,
+                        size: 18,
+                        color: colorScheme.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          strings.widgetManualAddHint,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -894,6 +1143,71 @@ class _ActionSettingTile extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _HomeWidgetPinTile extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String subtitle;
+  final String buttonLabel;
+  final VoidCallback onPin;
+
+  const _HomeWidgetPinTile({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.subtitle,
+    required this.buttonLabel,
+    required this.onPin,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        _SettingIconBadge(icon: icon, color: iconColor),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                  height: 1.35,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 10),
+        FilledButton.tonal(
+          onPressed: onPin,
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            minimumSize: const Size(0, 36),
+          ),
+          child: Text(
+            buttonLabel,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+          ),
+        ),
+      ],
     );
   }
 }

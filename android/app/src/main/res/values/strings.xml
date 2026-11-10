@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">EKiiYou</string>
+    <string name="widget_review_word_title">بطاقة مراجعة الكلمات (EKiiYou)</string>
+    <string name="widget_review_word_desc">عرض كلمة إنجليزية ومعناها بالعربية مع زر تأكيد القراءة والتبديل</string>
+    <string name="widget_quick_add_title">إضافة سريعة وتقدم اليوم (EKiiYou)</string>
+    <string name="widget_quick_add_desc">اختصار لإضافة كلمة جديدة فوراً ومتابعة تقدم المراجعة اليومية</string>
+    <string name="widget_flashcard_title">بطاقة اختبار تفاعلية (EKiiYou)</string>
+    <string name="widget_flashcard_desc">اختبر تذكرك للكلمات مباشرة من الشاشة الرئيسية</string>
+</resources>
