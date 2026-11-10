@@ -2,8 +2,19 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
+
+/// Honest outcome of trying to schedule the daily reminder.
+enum ReminderScheduleResult {
+  scheduled,
+  permissionDenied,
+
+  /// The platform has no local-notification support (e.g. Windows desktop in
+  /// this plugin version) or the OS rejected the request.
+  failed,
+}
 
 class NotificationService {
   static final NotificationService instance = NotificationService._internal();
@@ -16,10 +27,18 @@ class NotificationService {
 
   static const int _dailyReminderId = 1001;
 
+  bool get _isSupportedPlatform =>
+      !kIsWeb &&
+      (Platform.isAndroid ||
+          Platform.isIOS ||
+          Platform.isMacOS ||
+          Platform.isLinux);
+
   Future<void> initialize() async {
-    if (_initialized) return;
+    if (_initialized || !_isSupportedPlatform) return;
     try {
       tz.initializeTimeZones();
+      await _configureLocalTimezone();
 
       const androidSettings = AndroidInitializationSettings(
         '@mipmap/launcher_icon',
@@ -30,7 +49,7 @@ class NotificationService {
         requestSoundPermission: false,
       );
       const linuxSettings = LinuxInitializationSettings(
-        defaultActionName: 'Open Smart Vocabulary Notebook',
+        defaultActionName: 'Open EKiiYou',
       );
 
       const initSettings = InitializationSettings(
@@ -42,71 +61,108 @@ class NotificationService {
 
       await _plugin.initialize(initSettings);
       _initialized = true;
-    } catch (_) {
-      // Gracefully ignore initialization errors on unsupported desktop/test environments
+    } catch (e) {
+      debugPrint('NotificationService.initialize failed: $e');
     }
   }
 
-  /// Requests notification permissions on Android 13+ and iOS/macOS.
-  /// Returns true if granted (or if running on a platform that does not require runtime permission).
-  Future<bool> requestPermissions() async {
-    await initialize();
+  /// Without this, `tz.local` stays UTC and an 8:00 PM reminder would fire at
+  /// 8:00 PM UTC (e.g. 10:00 PM in Egypt).
+  Future<void> _configureLocalTimezone() async {
     try {
-      if (kIsWeb) return false;
+      final info = await FlutterTimezone.getLocalTimezone();
+      tz.setLocalLocation(tz.getLocation(info.identifier));
+    } catch (e) {
+      // Unknown identifier or plugin unavailable: fall back to a fixed-offset
+      // zone matching the device's current UTC offset so the time is still
+      // correct (it just won't follow future DST changes).
+      debugPrint('Could not resolve device timezone, using offset: $e');
+      final offset = DateTime.now().timeZoneOffset;
+      tz.setLocalLocation(
+        tz.Location('Device', [], [], [
+          tz.TimeZone(
+            offset.inMilliseconds,
+            isDst: false,
+            abbreviation: 'LOCAL',
+          ),
+        ]),
+      );
+    }
+  }
+
+  /// Returns whether notifications are currently allowed. When [request] is
+  /// true, the OS permission prompt may be shown.
+  Future<bool> _hasPermission({required bool request}) async {
+    try {
       if (Platform.isAndroid) {
-        final androidImplementation = _plugin
+        final android = _plugin
             .resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin
             >();
-        if (androidImplementation != null) {
-          final granted = await androidImplementation
-              .requestNotificationsPermission();
-          return granted ?? true;
+        if (android == null) return false;
+        if (request) {
+          await android.requestNotificationsPermission();
         }
-        return true;
-      } else if (Platform.isIOS) {
-        final iosImplementation = _plugin
+        return await android.areNotificationsEnabled() ?? false;
+      }
+      if (Platform.isIOS) {
+        final ios = _plugin
             .resolvePlatformSpecificImplementation<
               IOSFlutterLocalNotificationsPlugin
             >();
-        if (iosImplementation != null) {
-          final granted = await iosImplementation.requestPermissions(
-            alert: true,
-            badge: true,
-            sound: true,
-          );
-          return granted ?? false;
+        if (ios == null) return false;
+        if (request) {
+          return await ios.requestPermissions(
+                alert: true,
+                badge: true,
+                sound: true,
+              ) ??
+              false;
         }
-      } else if (Platform.isMacOS) {
-        final macImplementation = _plugin
+        final options = await ios.checkPermissions();
+        return options?.isEnabled ?? false;
+      }
+      if (Platform.isMacOS) {
+        final mac = _plugin
             .resolvePlatformSpecificImplementation<
               MacOSFlutterLocalNotificationsPlugin
             >();
-        if (macImplementation != null) {
-          final granted = await macImplementation.requestPermissions(
-            alert: true,
-            badge: true,
-            sound: true,
-          );
-          return granted ?? false;
+        if (mac == null) return false;
+        if (request) {
+          return await mac.requestPermissions(
+                alert: true,
+                badge: true,
+                sound: true,
+              ) ??
+              false;
         }
+        final options = await mac.checkPermissions();
+        return options?.isEnabled ?? false;
       }
-      return true;
-    } catch (_) {
-      return true;
+      // Linux has no runtime permission model.
+      return Platform.isLinux;
+    } catch (e) {
+      debugPrint('Notification permission check failed: $e');
+      return false;
     }
   }
 
-  Future<bool> scheduleDailyReminder({
+  /// Schedules (or re-schedules) the repeating daily reminder.
+  ///
+  /// Set [requestPermission] to false for silent re-scheduling at app start so
+  /// the user isn't prompted on every launch.
+  Future<ReminderScheduleResult> scheduleDailyReminder({
     required int hour,
     required int minute,
     required String title,
     required String body,
+    bool requestPermission = true,
   }) async {
     await initialize();
-    final granted = await requestPermissions();
-    if (!granted) {
-      return false;
+    if (!_initialized) return ReminderScheduleResult.failed;
+
+    if (!await _hasPermission(request: requestPermission)) {
+      return ReminderScheduleResult.permissionDenied;
     }
 
     try {
@@ -121,7 +177,7 @@ class NotificationService {
         hour,
         minute,
       );
-      if (scheduledDate.isBefore(now)) {
+      if (!scheduledDate.isAfter(now)) {
         scheduledDate = scheduledDate.add(const Duration(days: 1));
       }
 
@@ -150,18 +206,20 @@ class NotificationService {
             UILocalNotificationDateInterpretation.absoluteTime,
         matchDateTimeComponents: DateTimeComponents.time,
       );
-      return true;
-    } catch (_) {
-      // On desktop platforms where zonedSchedule may not be supported, return true
-      // so the user's reminder preference is still saved without crashing.
-      return true;
+      return ReminderScheduleResult.scheduled;
+    } catch (e) {
+      debugPrint('Scheduling daily reminder failed: $e');
+      return ReminderScheduleResult.failed;
     }
   }
 
   Future<void> cancelDailyReminder() async {
     await initialize();
+    if (!_initialized) return;
     try {
       await _plugin.cancel(_dailyReminderId);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Cancelling daily reminder failed: $e');
+    }
   }
 }

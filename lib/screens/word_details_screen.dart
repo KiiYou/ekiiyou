@@ -423,18 +423,25 @@ class _WordDetailsScreenState extends State<WordDetailsScreen> {
                   !hasDefinition ||
                   word.informationStatus != InformationStatus.complete) ...[
                 const SizedBox(height: 16),
-                OutlinedButton.icon(
-                  onPressed: _isRetryingLookup
-                      ? null
-                      : () => _handleRetryLookup(word),
-                  icon: _isRetryingLookup
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.sync_rounded),
-                  label: Text(strings.retryLookup),
+                Builder(
+                  builder: (context) {
+                    final isBusy =
+                        _isRetryingLookup ||
+                        widget.controller.isEnriching(word.id);
+                    return OutlinedButton.icon(
+                      onPressed: isBusy ? null : () => _handleRetryLookup(word),
+                      icon: isBusy
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.sync_rounded),
+                      label: Text(
+                        isBusy ? strings.statusEnriching : strings.retryLookup,
+                      ),
+                    );
+                  },
                 ),
               ],
 

@@ -114,7 +114,7 @@ void main() {
 
   group('Spaced Repetition System', () {
     test(
-      'Forgotten words return much sooner than remembered words and sessions do not repeat',
+      'Forgotten words reset streak, return sooner, and only due words are selected',
       () {
         const srs = SpacedRepetitionService();
         final now = DateTime(2026, 11, 10, 12, 0);
@@ -143,26 +143,70 @@ void main() {
           isTrue,
         );
         expect(forgotten.forgottenCount, 1);
+        expect(forgotten.streak, 0);
         expect(remembered.reviewCount, 1);
+        expect(remembered.streak, 1);
 
-        final words = List.generate(
-          5,
-          (i) => VocabularyWord(
-            id: i + 1,
-            word: 'word$i',
-            normalizedWord: 'word$i',
+        // Build a 4-streak word, then forget it -> streak resets to 0, and next
+        // remembered answer schedules 1 day out (not 14 or 30 days).
+        var progressed = word;
+        for (var i = 0; i < 4; i++) {
+          progressed = srs.recordReview(
+            word: progressed,
+            remembered: true,
+            reviewedAt: now,
+          );
+        }
+        expect(progressed.streak, 4);
+
+        final lapsed = srs.recordReview(
+          word: progressed,
+          remembered: false,
+          reviewedAt: now,
+        );
+        expect(lapsed.streak, 0);
+
+        final recovered = srs.recordReview(
+          word: lapsed,
+          remembered: true,
+          reviewedAt: now,
+        );
+        expect(recovered.streak, 1);
+        expect(
+          recovered.nextReviewAt.difference(now),
+          const Duration(days: 1),
+        );
+
+        // Only due words are selected by selectDueWords
+        final words = [
+          ...List.generate(
+            5,
+            (i) => VocabularyWord(
+              id: i + 1,
+              word: 'word$i',
+              normalizedWord: 'word$i',
+              createdAt: now,
+              updatedAt: now,
+              nextReviewAt: now,
+            ),
+          ),
+          VocabularyWord(
+            id: 99,
+            word: 'future',
+            normalizedWord: 'future',
             createdAt: now,
             updatedAt: now,
-            nextReviewAt: now,
+            nextReviewAt: now.add(const Duration(days: 3)),
           ),
-        );
-        final session = srs.selectWordsForSession(
+        ];
+        final session = srs.selectDueWords(
           allWords: words,
-          sessionLimit: 10,
+          limit: 10,
           now: now,
         );
         expect(session.length, 5);
         expect(session.map((w) => w.id).toSet().length, 5);
+        expect(session.any((w) => w.id == 99), isFalse);
       },
     );
   });
@@ -186,6 +230,7 @@ void main() {
         // Test offline word addition + auto sync when connectivity returns
         dict.simulateOffline = true;
         final pendingWord = await controller.addWord(rawWord: 'serendipity');
+        await controller.waitForBackgroundLookups();
         expect(pendingWord.informationStatus, InformationStatus.pending);
         expect(controller.pendingWordsCount, 1);
 
@@ -205,7 +250,7 @@ void main() {
         expect(find.text('serendipity'), findsOneWidget);
         expect(find.text('مصادفة سعيدة'), findsOneWidget);
 
-        // Add another word via UI Bottom Sheet
+        // Add another word via UI Bottom Sheet (non-blocking save + background enrichment)
         await tester.tap(find.byKey(const Key('home_add_word_button')));
         await tester.pumpAndSettle();
 
@@ -215,16 +260,18 @@ void main() {
         );
         await tester.tap(find.byKey(const Key('submit_word_button')));
         await tester.pumpAndSettle();
+        await controller.waitForBackgroundLookups();
+        await tester.pumpAndSettle();
 
         expect(controller.totalWordsCount, 2);
 
-        // Navigate to My Words tab and test instant search by Arabic & English
+        // Navigate to My Words tab and test instant search by Arabic (including normalized ه vs ة)
         await tester.tap(find.byKey(const Key('nav_my_words')));
         await tester.pumpAndSettle();
 
         await tester.enterText(
           find.byKey(const Key('vocabulary_search_field')),
-          'تفاحة',
+          'تفاحه',
         );
         await tester.pumpAndSettle();
         expect(find.text('Apple'), findsOneWidget);
@@ -248,16 +295,22 @@ void main() {
         await tester.tap(find.byKey(const Key('home_start_review_button')));
         await tester.pumpAndSettle();
 
-        // Card 1: Reveal answer and tap Remembered
+        // Card 1: Reveal answer and tap Forgot -> re-queued at end of session!
+        await tester.tap(find.byKey(const Key('show_answer_button')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('forgot_button')));
+        await tester.pumpAndSettle();
+
+        // Card 2: Reveal answer and tap Remembered
         await tester.tap(find.byKey(const Key('show_answer_button')));
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('remembered_button')));
         await tester.pumpAndSettle();
 
-        // Card 2: Reveal answer and tap Forgot
+        // Card 3 (the re-queued forgotten card): Reveal answer and tap Remembered
         await tester.tap(find.byKey(const Key('show_answer_button')));
         await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const Key('forgot_button')));
+        await tester.tap(find.byKey(const Key('remembered_button')));
         await tester.pumpAndSettle();
 
         // Session complete screen

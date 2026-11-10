@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/notification_service.dart';
 import '../state/vocabulary_controller.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -228,11 +229,16 @@ class SettingsScreen extends StatelessWidget {
                 ),
                 value: settings.reminderEnabled,
                 onChanged: (enabled) async {
-                  final ok = await controller.setReminderEnabled(enabled);
-                  if (!ok && context.mounted) {
+                  final result = await controller.setReminderEnabled(enabled);
+                  if (result != ReminderScheduleResult.scheduled &&
+                      context.mounted) {
+                    final message =
+                        result == ReminderScheduleResult.permissionDenied
+                        ? strings.notificationPermissionDenied
+                        : strings.notificationScheduleFailed;
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text(strings.notificationPermissionDenied),
+                        content: Text(message),
                         behavior: SnackBarBehavior.floating,
                       ),
                     );

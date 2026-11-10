@@ -9,6 +9,7 @@ class WordListTile extends StatelessWidget {
   final AppStrings strings;
   final VoidCallback onTap;
   final VoidCallback onPlayAudio;
+  final bool isEnriching;
 
   const WordListTile({
     super.key,
@@ -16,6 +17,7 @@ class WordListTile extends StatelessWidget {
     required this.strings,
     required this.onTap,
     required this.onPlayAudio,
+    this.isEnriching = false,
   });
 
   @override
@@ -130,6 +132,7 @@ class WordListTile extends StatelessWidget {
                       _StatusBadge(
                         status: word.informationStatus,
                         strings: strings,
+                        isEnriching: isEnriching,
                       ),
                   ],
                 ),
@@ -150,11 +153,46 @@ class WordListTile extends StatelessWidget {
 class _StatusBadge extends StatelessWidget {
   final InformationStatus status;
   final AppStrings strings;
+  final bool isEnriching;
 
-  const _StatusBadge({required this.status, required this.strings});
+  const _StatusBadge({
+    required this.status,
+    required this.strings,
+    this.isEnriching = false,
+  });
 
   @override
   Widget build(BuildContext context) {
+    if (isEnriching) {
+      final primary = Theme.of(context).colorScheme.primary;
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+              strokeWidth: 1.8,
+              color: primary,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              strings.statusEnriching,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: primary,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      );
+    }
+
     final isPending = status == InformationStatus.pending;
     final color = isPending ? AppTheme.accentAmber : Colors.grey;
     final label = isPending

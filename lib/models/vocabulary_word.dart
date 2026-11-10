@@ -37,6 +37,10 @@ class VocabularyWord {
   final DateTime nextReviewAt;
   final int reviewCount;
   final int forgottenCount;
+
+  /// Consecutive "Remembered" answers since the last "Forgot". Drives the
+  /// review interval and resets to 0 whenever the word is forgotten.
+  final int streak;
   final bool isSynced;
   final InformationStatus informationStatus;
 
@@ -58,6 +62,7 @@ class VocabularyWord {
     required this.nextReviewAt,
     this.reviewCount = 0,
     this.forgottenCount = 0,
+    this.streak = 0,
     this.isSynced = false,
     this.informationStatus = InformationStatus.pending,
   });
@@ -65,6 +70,21 @@ class VocabularyWord {
   /// Normalizes a word for duplicate detection: trims and collapses whitespace, lowercases.
   static String normalize(String input) {
     return input.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+  }
+
+  /// Normalizes Arabic text for search (strips diacritics/tatweel and unifies
+  /// alef variants, taa marbuta, and alef maqsura).
+  static String normalizeArabic(String input) {
+    return input
+        .trim()
+        .replaceAll(RegExp(r'[\u064B-\u065F\u0670\u0640]'), '')
+        .replaceAll(RegExp(r'[أإآٱ]'), 'ا')
+        .replaceAll('ة', 'ه')
+        .replaceAll('ى', 'ي')
+        .replaceAll('ؤ', 'و')
+        .replaceAll('ئ', 'ي')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .toLowerCase();
   }
 
   bool get hasPronunciationAudio =>
@@ -97,6 +117,7 @@ class VocabularyWord {
     DateTime? nextReviewAt,
     int? reviewCount,
     int? forgottenCount,
+    int? streak,
     bool? isSynced,
     InformationStatus? informationStatus,
   }) {
@@ -133,6 +154,7 @@ class VocabularyWord {
       nextReviewAt: nextReviewAt ?? this.nextReviewAt,
       reviewCount: reviewCount ?? this.reviewCount,
       forgottenCount: forgottenCount ?? this.forgottenCount,
+      streak: streak ?? this.streak,
       isSynced: isSynced ?? this.isSynced,
       informationStatus: informationStatus ?? this.informationStatus,
     );
@@ -157,6 +179,7 @@ class VocabularyWord {
       'nextReviewAt': nextReviewAt.toIso8601String(),
       'reviewCount': reviewCount,
       'forgottenCount': forgottenCount,
+      'streak': streak,
       'isSynced': isSynced ? 1 : 0,
       'informationStatus': informationStatus.toJson(),
     };
@@ -192,6 +215,7 @@ class VocabularyWord {
           DateTime.now(),
       reviewCount: (map['reviewCount'] as int?) ?? 0,
       forgottenCount: (map['forgottenCount'] as int?) ?? 0,
+      streak: (map['streak'] as int?) ?? 0,
       isSynced: (map['isSynced'] == 1 || map['isSynced'] == true),
       informationStatus: InformationStatus.fromJson(
         map['informationStatus'] as String?,

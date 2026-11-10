@@ -44,6 +44,7 @@ class HomeScreen extends StatelessWidget {
           strings.wordAddedToast(
             result.word.word,
             result.word.informationStatus,
+            isOffline: controller.isOffline,
           ),
         ),
         behavior: SnackBarBehavior.floating,
@@ -387,6 +388,7 @@ class HomeScreen extends StatelessWidget {
               child: WordListTile(
                 word: word,
                 strings: strings,
+                isEnriching: controller.isEnriching(word.id),
                 onTap: () => _openWordDetails(context, word),
                 onPlayAudio: () => controller.playPronunciation(word),
               ),

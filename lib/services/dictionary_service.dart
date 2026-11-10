@@ -72,80 +72,101 @@ class StandardDictionaryService implements DictionaryService {
 
     bool hadNetworkError = false;
 
-    String? englishDefinition;
-    String? partOfSpeech;
-    String? phonetic;
-    String? audioRemoteUrl;
-    String? exampleSentence;
+    bool isNetworkError(Object e) =>
+        e is SocketException ||
+        e is TimeoutException ||
+        e is http.ClientException;
 
-    // 1. Fetch English dictionary entry from Free Dictionary API
-    try {
-      final uri = Uri.parse(
-        'https://api.dictionaryapi.dev/api/v2/entries/en/${Uri.encodeComponent(normalized)}',
-      );
-      final response = await _client.get(uri).timeout(timeout);
-
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-        if (decoded is List && decoded.isNotEmpty) {
-          final parsed = _parseFreeDictionaryPayload(decoded);
-          englishDefinition = parsed.englishDefinition;
-          partOfSpeech = parsed.partOfSpeech;
-          phonetic = parsed.phonetic;
-          audioRemoteUrl = parsed.audioRemoteUrl;
-          exampleSentence = parsed.exampleSentence;
-        }
-      }
-    } on SocketException {
-      hadNetworkError = true;
-    } on TimeoutException {
-      hadNetworkError = true;
-    } on http.ClientException {
-      hadNetworkError = true;
-    } catch (_) {
-      // Non-fatal parse error; continue to translation lookup
-    }
-
-    // 2. Fetch Arabic meaning for the word
-    String? arabicMeaning;
-    try {
-      arabicMeaning = await _translateToArabic(normalized);
-      // Avoid setting Arabic meaning if the API echoed the exact English word back
-      if (arabicMeaning != null &&
-          VocabularyWord.normalize(arabicMeaning) == normalized) {
-        arabicMeaning = null;
-      }
-    } on SocketException {
-      hadNetworkError = true;
-    } on TimeoutException {
-      hadNetworkError = true;
-    } on http.ClientException {
-      hadNetworkError = true;
-    } catch (_) {}
-
-    // 3. Fetch Arabic translation for the example sentence (if available)
-    String? exampleTranslation;
-    if (exampleSentence != null && exampleSentence.trim().isNotEmpty) {
+    // 1. English dictionary entry (Free Dictionary API).
+    Future<_ParsedDictionaryFields?> fetchEntry() async {
       try {
-        exampleTranslation = await _translateToArabic(exampleSentence);
-      } catch (_) {}
+        final uri = Uri.parse(
+          'https://api.dictionaryapi.dev/api/v2/entries/en/${Uri.encodeComponent(normalized)}',
+        );
+        final response = await _client.get(uri).timeout(timeout);
+        if (response.statusCode == 200) {
+          final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+          if (decoded is List && decoded.isNotEmpty) {
+            return _parseFreeDictionaryPayload(decoded);
+          }
+        } else if (response.statusCode >= 500 || response.statusCode == 429) {
+          // Server trouble or rate limit: worth retrying later, unlike 404.
+          hadNetworkError = true;
+        }
+      } catch (e) {
+        if (isNetworkError(e)) hadNetworkError = true;
+      }
+      return null;
     }
 
-    // 4. Download & cache pronunciation audio locally when available
-    String? audioLocalPath;
-    if (audioRemoteUrl != null && audioRemoteUrl.trim().isNotEmpty) {
-      audioLocalPath = await cacheAudioFile(normalized, audioRemoteUrl);
+    // 2. Arabic meaning of the word.
+    Future<String?> fetchArabicMeaning() async {
+      try {
+        final translated = await _translateToArabic(normalized);
+        // Ignore results where the service just echoed the English word back.
+        if (translated != null &&
+            VocabularyWord.normalize(translated) != normalized) {
+          return translated;
+        }
+      } catch (e) {
+        if (isNetworkError(e)) hadNetworkError = true;
+      }
+      return null;
     }
 
-    final hasData = (englishDefinition != null && englishDefinition.isNotEmpty) ||
-        (arabicMeaning != null && arabicMeaning.isNotEmpty) ||
-        (phonetic != null && phonetic.isNotEmpty);
+    // The entry and the meaning are independent, so fetch them in parallel.
+    final firstWave = await Future.wait<Object?>([
+      fetchEntry(),
+      fetchArabicMeaning(),
+    ]);
+    final entry = firstWave[0] as _ParsedDictionaryFields?;
+    final arabicMeaning = firstWave[1] as String?;
+
+    final englishDefinition = entry?.englishDefinition;
+    final partOfSpeech = entry?.partOfSpeech;
+    final phonetic = entry?.phonetic;
+    final audioRemoteUrl = entry?.audioRemoteUrl;
+    final exampleSentence = entry?.exampleSentence;
+
+    // 3 + 4. Example translation and audio caching both depend on the entry,
+    // but not on each other.
+    Future<String?> fetchExampleTranslation() async {
+      if (exampleSentence == null || exampleSentence.trim().isEmpty) {
+        return null;
+      }
+      try {
+        return await _translateToArabic(exampleSentence);
+      } catch (e) {
+        if (isNetworkError(e)) hadNetworkError = true;
+        return null;
+      }
+    }
+
+    Future<String?> fetchAudio() async {
+      if (audioRemoteUrl == null || audioRemoteUrl.trim().isEmpty) return null;
+      return cacheAudioFile(normalized, audioRemoteUrl);
+    }
+
+    final secondWave = await Future.wait<String?>([
+      fetchExampleTranslation(),
+      fetchAudio(),
+    ]);
+    final exampleTranslation = secondWave[0];
+    final audioLocalPath = secondWave[1];
+
+    final hasArabic = arabicMeaning != null && arabicMeaning.isNotEmpty;
+    final hasDefinition =
+        englishDefinition != null && englishDefinition.isNotEmpty;
+    final hasAnyData =
+        hasArabic || hasDefinition || (phonetic != null && phonetic.isNotEmpty);
 
     final InformationStatus status;
-    if (hasData) {
-      status = InformationStatus.complete;
-    } else if (hadNetworkError) {
+    if (hadNetworkError && !(hasArabic && hasDefinition)) {
+      // Something is missing because a request failed, not because the data
+      // doesn't exist: keep it pending so it is retried automatically.
       status = InformationStatus.pending;
+    } else if (hasAnyData) {
+      status = InformationStatus.complete;
     } else {
       status = InformationStatus.unavailable;
     }

@@ -109,6 +109,8 @@ class AppStrings {
       : 'No words match your search';
 
   // Status labels
+  String get statusEnriching =>
+      isAr ? 'جارٍ جلب المعنى والتعريف...' : 'Fetching meaning & definition...';
   String get statusPending =>
       isAr ? 'بانتظار جلب المعنى' : 'Pending lookup';
   String get statusUnavailable =>
@@ -163,6 +165,14 @@ class AppStrings {
   String get noWordsToReview => isAr
       ? 'أضف بعض الكلمات أولاً لتبدأ المراجعة اليومية!'
       : 'Add some words first to start your daily review!';
+  String get allCaughtUpTitle => isAr
+      ? 'لا توجد كلمات مستحقة للمراجعة الآن!'
+      : 'You are all caught up for now!';
+  String get allCaughtUpSubtitle => isAr
+      ? 'راجعت جميع الكلمات المستحقة حالياً. يمكنك بدء جلسة تدريب إضافية دون التأثير على جدول التكرار المتباعد.'
+      : 'All due words have been reviewed. You can start an extra practice session without affecting your spaced-repetition schedule.';
+  String get startPracticeSession =>
+      isAr ? 'بدء تدريب إضافي' : 'Practice Anyway';
 
   // Settings Screen
   String get dailyTargetSetting =>
@@ -184,6 +194,9 @@ class AppStrings {
   String get notificationPermissionDenied => isAr
       ? 'تم رفض إذن الإشعارات. يرجى تفعيله من إعدادات النظام لتلقي التذكير.'
       : 'Notification permission was denied. Please enable it in system settings.';
+  String get notificationScheduleFailed => isAr
+      ? 'تعذر تفعيل التذكير المحلي على هذا الجهاز أو النظام.'
+      : 'Could not schedule local notifications on this device/platform.';
   String get notificationTitle =>
       isAr ? 'حان وقت مراجعة كلماتك الإنجليزية!' : 'Time to review your English words!';
   String get notificationBody => isAr
@@ -235,13 +248,22 @@ class AppStrings {
       ? 'بيانات النسخة الاحتياطية غير صالحة'
       : 'Invalid backup JSON format';
 
-  String wordAddedToast(String word, InformationStatus status) {
+  String wordAddedToast(
+    String word,
+    InformationStatus status, {
+    bool isOffline = false,
+  }) {
     if (status == InformationStatus.complete) {
       return isAr ? 'تمت إضافة "$word" بنجاح' : 'Added "$word"';
     } else if (status == InformationStatus.pending) {
+      if (isOffline) {
+        return isAr
+            ? 'تم حفظ "$word" بدون إنترنت — سيجلب معناها لاحقاً'
+            : 'Saved "$word" offline — details will sync when online';
+      }
       return isAr
-          ? 'تم حفظ "$word" بدون إنترنت — سيجلب معناها لاحقاً'
-          : 'Saved "$word" offline — details will sync when online';
+          ? 'تم حفظ "$word" — جارٍ جلب المعنى والنطق في الخلفية'
+          : 'Saved "$word" — fetching meaning & audio in background';
     } else {
       return isAr
           ? 'تم حفظ "$word" (بعض بيانات القاموس غير متوفرة)'

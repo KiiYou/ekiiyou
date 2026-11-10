@@ -13,6 +13,15 @@ import '../services/dictionary_service.dart';
 import '../services/notification_service.dart';
 import '../services/spaced_repetition_service.dart';
 
+class ReviewSession {
+  final List<VocabularyWord> words;
+
+  /// True when the user asked for extra practice with words that aren't due.
+  final bool isPractice;
+
+  const ReviewSession({required this.words, required this.isPractice});
+}
+
 class VocabularyController extends ChangeNotifier {
   final DatabaseHelper _dbHelper;
   final DictionaryService _dictionaryService;
@@ -34,6 +43,8 @@ class VocabularyController extends ChangeNotifier {
   bool _isAddingWord = false;
   bool _isSyncingPending = false;
   bool _isOffline = false;
+  final Set<int> _enrichingIds = {};
+  final Set<Future<void>> _enrichmentTasks = {};
 
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
@@ -62,8 +73,10 @@ class VocabularyController extends ChangeNotifier {
 
   bool get isInitialized => _isInitialized;
   bool get isAddingWord => _isAddingWord;
-  bool get isSyncingPending => _isSyncingPending;
+  bool get isSyncingPending => _isSyncingPending || _enrichingIds.isNotEmpty;
   bool get isOffline => _isOffline;
+  bool isEnriching(int? wordId) =>
+      wordId != null && _enrichingIds.contains(wordId);
 
   int get totalWordsCount => _allWords.length;
   int get pendingWordsCount => _allWords
@@ -71,14 +84,16 @@ class VocabularyController extends ChangeNotifier {
       .length;
   int get dueWordsCount => _spacedRepetition.countDueWords(_allWords);
 
-  int get reviewedTodayCount {
-    _ensureCurrentDayKey();
-    return _reviewedTodayIds.length;
-  }
+  int get reviewedTodayCount => _reviewedTodayIds.length;
 
-  Set<int> get reviewedTodayIds {
-    _ensureCurrentDayKey();
-    return Set.unmodifiable(_reviewedTodayIds);
+  Set<int> get reviewedTodayIds => Set.unmodifiable(_reviewedTodayIds);
+
+  /// Resets the daily counter if the calendar day has rolled over (e.g. when
+  /// the app resumes after midnight).
+  void checkDayRollover() {
+    if (_ensureCurrentDayKey()) {
+      notifyListeners();
+    }
   }
 
   Future<void> initialize() async {
@@ -90,6 +105,27 @@ class VocabularyController extends ChangeNotifier {
 
     if (enableConnectivityListener) {
       _setupConnectivityMonitoring();
+      if (_settings.reminderEnabled) {
+        _reverifyReminderAtStartup();
+      }
+    }
+  }
+
+  /// Re-schedules the alarm so OS clears / app updates don't lose it, and turns
+  /// the toggle off if the user revoked notification permission in settings.
+  Future<void> _reverifyReminderAtStartup() async {
+    final result = await _notificationService.scheduleDailyReminder(
+      hour: _settings.reminderHour,
+      minute: _settings.reminderMinute,
+      title: strings.notificationTitle,
+      body: strings.notificationBody,
+      requestPermission: false,
+    );
+    if (result != ReminderScheduleResult.scheduled) {
+      _settings = _settings.copyWith(reminderEnabled: false);
+      notifyListeners();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('reminder_enabled', false);
     }
   }
 
@@ -134,16 +170,18 @@ class VocabularyController extends ChangeNotifier {
     return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
   }
 
-  void _ensureCurrentDayKey() {
+  bool _ensureCurrentDayKey() {
     final today = _todayKey();
-    if (_currentDayKey != today) {
+    if (_currentDayKey.isNotEmpty && _currentDayKey != today) {
       _currentDayKey = today;
       _reviewedTodayIds = {};
       SharedPreferences.getInstance().then((prefs) {
         prefs.setString('reviewed_day_key', _currentDayKey);
         prefs.setStringList('reviewed_today_ids', []);
       });
+      return true;
     }
+    return false;
   }
 
   void _setupConnectivityMonitoring() {
@@ -174,31 +212,61 @@ class VocabularyController extends ChangeNotifier {
 
   Future<void> refreshWords() async {
     _allWords = await _dbHelper.getAllWords(sortOrder: SortOrder.newest);
-    await _applySearchAndSort();
+    _applySearchAndSort();
     notifyListeners();
   }
 
-  Future<void> _applySearchAndSort() async {
-    if (_searchQuery.trim().isEmpty && _sortOrder == SortOrder.newest) {
-      _filteredWords = List.from(_allWords);
-    } else {
-      _filteredWords = await _dbHelper.getAllWords(
-        searchQuery: _searchQuery,
-        sortOrder: _sortOrder,
-      );
+  void _applySearchAndSort() {
+    final trimmed = _searchQuery.trim();
+    Iterable<VocabularyWord> matches = _allWords;
+
+    if (trimmed.isNotEmpty) {
+      final normQuery = VocabularyWord.normalize(trimmed);
+      final normArQuery = VocabularyWord.normalizeArabic(trimmed);
+      matches = _allWords.where((w) {
+        if (w.normalizedWord.contains(normQuery) ||
+            w.word.toLowerCase().contains(normQuery)) {
+          return true;
+        }
+        final meaning = w.arabicMeaning;
+        if (meaning != null && meaning.isNotEmpty) {
+          if (meaning.contains(trimmed) ||
+              VocabularyWord.normalizeArabic(meaning).contains(normArQuery)) {
+            return true;
+          }
+        }
+        return false;
+      });
     }
+
+    final list = matches.toList();
+    switch (_sortOrder) {
+      case SortOrder.newest:
+        // _allWords is already ordered newest-first from SQLite
+        break;
+      case SortOrder.oldest:
+        list.sort((a, b) {
+          final cmp = a.createdAt.compareTo(b.createdAt);
+          return cmp != 0 ? cmp : (a.id ?? 0).compareTo(b.id ?? 0);
+        });
+        break;
+      case SortOrder.alphabetical:
+        list.sort((a, b) => a.normalizedWord.compareTo(b.normalizedWord));
+        break;
+    }
+    _filteredWords = list;
   }
 
   Future<void> setSearchQuery(String query) async {
     _searchQuery = query;
-    await _applySearchAndSort();
+    _applySearchAndSort();
     notifyListeners();
   }
 
   Future<void> setSortOrder(SortOrder order) async {
     if (_sortOrder == order) return;
     _sortOrder = order;
-    await _applySearchAndSort();
+    _applySearchAndSort();
     notifyListeners();
   }
 
@@ -214,8 +282,11 @@ class VocabularyController extends ChangeNotifier {
     return null;
   }
 
-  /// Adds a new English word, automatically retrieving dictionary info when online,
-  /// or saving immediately as `pending` when offline.
+  /// Saves a new English word immediately, then fetches its dictionary
+  /// information in the background so the user never waits on the network.
+  ///
+  /// The returned word has `pending` status (unless the user typed the meaning
+  /// and definition manually). Use [isEnriching] to show a loading state.
   Future<VocabularyWord> addWord({
     required String rawWord,
     String? manualArabicMeaning,
@@ -240,63 +311,114 @@ class VocabularyController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final now = DateTime.now();
-      DictionaryLookupResult? lookup;
-
-      if (!_isOffline) {
-        lookup = await _dictionaryService.lookupWord(cleaned);
-      }
-
       String? trimOrNull(String? value) {
         if (value == null) return null;
         final t = value.trim();
         return t.isEmpty ? null : t;
       }
 
-      final arabicMeaning =
-          trimOrNull(manualArabicMeaning) ?? lookup?.arabicMeaning;
-      final englishDefinition =
-          trimOrNull(manualEnglishDefinition) ?? lookup?.englishDefinition;
-      final partOfSpeech =
-          trimOrNull(manualPartOfSpeech) ?? lookup?.partOfSpeech;
-      final phonetic = trimOrNull(manualPhonetic) ?? lookup?.phonetic;
-      final exampleSentence =
-          trimOrNull(manualExampleSentence) ?? lookup?.exampleSentence;
-      final exampleTranslation =
-          trimOrNull(manualExampleTranslation) ?? lookup?.exampleTranslation;
-
-      final InformationStatus status;
-      if (arabicMeaning != null || englishDefinition != null) {
-        status = InformationStatus.complete;
-      } else if (lookup == null) {
-        status = InformationStatus.pending;
-      } else {
-        status = lookup.status;
-      }
+      final now = DateTime.now();
+      final arabicMeaning = trimOrNull(manualArabicMeaning);
+      final englishDefinition = trimOrNull(manualEnglishDefinition);
 
       final newWord = VocabularyWord(
         word: cleaned,
         normalizedWord: normalized,
         arabicMeaning: arabicMeaning,
         englishDefinition: englishDefinition,
-        partOfSpeech: partOfSpeech,
-        phonetic: phonetic,
-        audioLocalPath: lookup?.audioLocalPath,
-        audioRemoteUrl: lookup?.audioRemoteUrl,
-        exampleSentence: exampleSentence,
-        exampleTranslation: exampleTranslation,
+        partOfSpeech: trimOrNull(manualPartOfSpeech),
+        phonetic: trimOrNull(manualPhonetic),
+        exampleSentence: trimOrNull(manualExampleSentence),
+        exampleTranslation: trimOrNull(manualExampleTranslation),
         createdAt: now,
         updatedAt: now,
         nextReviewAt: now, // Immediately eligible for daily review
-        informationStatus: status,
+        informationStatus: InformationStatus.pending,
       );
 
       final saved = await _dbHelper.insertWord(newWord);
       await refreshWords();
+
+      if (!_isOffline && saved.id != null) {
+        _startBackgroundEnrichment(saved.id!);
+      }
       return saved;
     } finally {
       _isAddingWord = false;
       notifyListeners();
+    }
+  }
+
+  void _startBackgroundEnrichment(int id) {
+    if (_enrichingIds.contains(id)) return;
+    _enrichingIds.add(id);
+    notifyListeners();
+
+    late final Future<void> task;
+    task = _enrichWord(id).whenComplete(() {
+      _enrichingIds.remove(id);
+      _enrichmentTasks.remove(task);
+      notifyListeners();
+    });
+    _enrichmentTasks.add(task);
+  }
+
+  /// Looks the word up and merges the result into the *latest* stored copy,
+  /// so edits or reviews made while the request was in flight aren't lost.
+  Future<VocabularyWord?> _enrichWord(int id) async {
+    final before = await _dbHelper.getWordById(id);
+    if (before == null) return null;
+
+    final lookup = await _dictionaryService.lookupWord(before.word);
+
+    final latest = await _dbHelper.getWordById(id);
+    if (latest == null) return null; // deleted meanwhile
+
+    final merged = _mergeLookup(latest, lookup);
+    final saved = await _dbHelper.updateWord(merged);
+    await refreshWords();
+    return saved;
+  }
+
+  /// Fills only the fields the user hasn't set, and derives the status.
+  VocabularyWord _mergeLookup(
+    VocabularyWord word,
+    DictionaryLookupResult lookup,
+  ) {
+    final merged = word.copyWith(
+      arabicMeaning: word.arabicMeaning ?? lookup.arabicMeaning,
+      englishDefinition: word.englishDefinition ?? lookup.englishDefinition,
+      partOfSpeech: word.partOfSpeech ?? lookup.partOfSpeech,
+      phonetic: word.phonetic ?? lookup.phonetic,
+      audioLocalPath: word.audioLocalPath ?? lookup.audioLocalPath,
+      audioRemoteUrl: word.audioRemoteUrl ?? lookup.audioRemoteUrl,
+      exampleSentence: word.exampleSentence ?? lookup.exampleSentence,
+      exampleTranslation: word.exampleTranslation ?? lookup.exampleTranslation,
+      updatedAt: DateTime.now(),
+    );
+
+    bool has(String? v) => v != null && v.trim().isNotEmpty;
+    final hasMeaning = has(merged.arabicMeaning);
+    final hasDefinition = has(merged.englishDefinition);
+
+    final InformationStatus status;
+    if (hasMeaning && hasDefinition) {
+      status = InformationStatus.complete;
+    } else if (lookup.status == InformationStatus.pending) {
+      status = InformationStatus.pending; // network trouble: retry later
+    } else if (hasMeaning || hasDefinition || lookup.hasAnyData) {
+      status = InformationStatus.complete; // that's all the dictionary has
+    } else {
+      status = InformationStatus.unavailable;
+    }
+    return merged.copyWith(informationStatus: status);
+  }
+
+  /// Completes when all background lookups started so far have finished.
+  @visibleForTesting
+  Future<void> waitForBackgroundLookups() async {
+    while (_enrichmentTasks.isNotEmpty) {
+      await Future.wait(_enrichmentTasks.toList());
     }
   }
 
@@ -327,70 +449,51 @@ class VocabularyController extends ChangeNotifier {
 
   /// Retries dictionary lookup for a single word and updates it in SQLite.
   Future<VocabularyWord> retryDictionaryLookup(VocabularyWord word) async {
-    if (word.id == null) return word;
-    final lookup = await _dictionaryService.lookupWord(word.word);
-
-    final updated = word.copyWith(
-      arabicMeaning: word.arabicMeaning ?? lookup.arabicMeaning,
-      englishDefinition: word.englishDefinition ?? lookup.englishDefinition,
-      partOfSpeech: word.partOfSpeech ?? lookup.partOfSpeech,
-      phonetic: word.phonetic ?? lookup.phonetic,
-      audioLocalPath: word.audioLocalPath ?? lookup.audioLocalPath,
-      audioRemoteUrl: word.audioRemoteUrl ?? lookup.audioRemoteUrl,
-      exampleSentence: word.exampleSentence ?? lookup.exampleSentence,
-      exampleTranslation: word.exampleTranslation ?? lookup.exampleTranslation,
-      informationStatus:
-          (word.arabicMeaning != null ||
-              lookup.arabicMeaning != null ||
-              word.englishDefinition != null ||
-              lookup.englishDefinition != null)
-          ? InformationStatus.complete
-          : lookup.status,
-      updatedAt: DateTime.now(),
-    );
-
-    final saved = await _dbHelper.updateWord(updated);
-    await refreshWords();
-    return saved;
+    final id = word.id;
+    if (id == null || _enrichingIds.contains(id)) return word;
+    _enrichingIds.add(id);
+    notifyListeners();
+    try {
+      return await _enrichWord(id) ?? word;
+    } finally {
+      _enrichingIds.remove(id);
+      notifyListeners();
+    }
   }
 
   /// Automatically attempts to retrieve missing information for all `pending` words.
+  /// Returns how many words became complete.
   Future<int> syncPendingWords() async {
     if (_isSyncingPending) return 0;
-    final pendingList = await _dbHelper.getPendingWords();
+    final pendingList = (await _dbHelper.getPendingWords())
+        .where((w) => w.id != null && !_enrichingIds.contains(w.id))
+        .toList();
     if (pendingList.isEmpty) return 0;
 
     _isSyncingPending = true;
     notifyListeners();
 
-    int updatedCount = 0;
+    int completedCount = 0;
     try {
       for (final word in pendingList) {
-        final lookup = await _dictionaryService.lookupWord(word.word);
-        if (lookup.status == InformationStatus.pending && !lookup.hasAnyData) {
-          // Still offline or network error; stop batch early
+        final id = word.id!;
+        _enrichingIds.add(id);
+        notifyListeners();
+        VocabularyWord? saved;
+        try {
+          saved = await _enrichWord(id);
+        } finally {
+          _enrichingIds.remove(id);
+        }
+        if (saved == null) continue;
+        if (saved.informationStatus == InformationStatus.complete) {
+          completedCount++;
+        } else if (saved.informationStatus == InformationStatus.pending) {
+          // Still failing at the network level: stop instead of hammering.
           break;
         }
-        final updated = word.copyWith(
-          arabicMeaning: word.arabicMeaning ?? lookup.arabicMeaning,
-          englishDefinition: word.englishDefinition ?? lookup.englishDefinition,
-          partOfSpeech: word.partOfSpeech ?? lookup.partOfSpeech,
-          phonetic: word.phonetic ?? lookup.phonetic,
-          audioLocalPath: word.audioLocalPath ?? lookup.audioLocalPath,
-          audioRemoteUrl: word.audioRemoteUrl ?? lookup.audioRemoteUrl,
-          exampleSentence: word.exampleSentence ?? lookup.exampleSentence,
-          exampleTranslation:
-              word.exampleTranslation ?? lookup.exampleTranslation,
-          informationStatus: lookup.status,
-          updatedAt: DateTime.now(),
-        );
-        await _dbHelper.updateWord(updated);
-        if (lookup.status == InformationStatus.complete) {
-          updatedCount++;
-        }
       }
-      await refreshWords();
-      return updatedCount;
+      return completedCount;
     } finally {
       _isSyncingPending = false;
       notifyListeners();
@@ -419,38 +522,57 @@ class VocabularyController extends ChangeNotifier {
     return _audioService.playWordPronunciation(word);
   }
 
-  /// Builds a non-repeating list of flashcards for the current review session.
-  List<VocabularyWord> buildReviewSessionQueue() {
+  /// Builds the flashcards for a review session.
+  ///
+  /// Normally only words that are due are included. When nothing is due and
+  /// the user explicitly asks to practice anyway, pass [practice] = true to get
+  /// upcoming words in a practice session that won't inflate their intervals.
+  ReviewSession buildReviewSession({bool practice = false}) {
     _ensureCurrentDayKey();
-    final remainingForTarget =
-        (_settings.dailyReviewTarget - _reviewedTodayIds.length).clamp(
-          0,
-          _settings.dailyReviewTarget,
-        );
-    // If the user has already reached today's target and taps "Review More Words",
-    // provide a fresh batch up to dailyReviewTarget.
-    final sessionLimit = remainingForTarget > 0
-        ? remainingForTarget
-        : _settings.dailyReviewTarget;
+    final target = _settings.dailyReviewTarget;
+    final remaining = target - _reviewedTodayIds.length;
+    // Once today's target is met, "Review More Words" offers another batch.
+    final limit = remaining > 0 ? remaining : target;
 
-    return _spacedRepetition.selectWordsForSession(
-      allWords: _allWords,
-      sessionLimit: sessionLimit,
-      reviewedTodayIds: remainingForTarget > 0 ? _reviewedTodayIds : const {},
+    if (practice) {
+      return ReviewSession(
+        words: _spacedRepetition.selectPracticeWords(
+          allWords: _allWords,
+          limit: limit,
+        ),
+        isPractice: true,
+      );
+    }
+    return ReviewSession(
+      words: _spacedRepetition.selectDueWords(
+        allWords: _allWords,
+        limit: limit,
+      ),
+      isPractice: false,
     );
   }
 
-  /// Records a flashcard review result (Remembered or Forgot) and persists daily progress.
+  /// Records a flashcard answer and persists daily progress.
+  ///
+  /// The answer is applied to the latest stored copy of the word, so a
+  /// background dictionary lookup that finished mid-session isn't overwritten.
   Future<VocabularyWord> recordWordReview({
     required VocabularyWord word,
     required bool remembered,
+    bool isPractice = false,
   }) async {
     _ensureCurrentDayKey();
+    final latest = word.id != null
+        ? (await _dbHelper.getWordById(word.id!) ?? word)
+        : word;
     final updated = _spacedRepetition.recordReview(
-      word: word,
+      word: latest,
       remembered: remembered,
+      isPractice: isPractice,
     );
-    final saved = await _dbHelper.updateWord(updated);
+    final saved = identical(updated, latest)
+        ? latest
+        : await _dbHelper.updateWord(updated);
 
     if (saved.id != null) {
       _reviewedTodayIds.add(saved.id!);
@@ -478,16 +600,16 @@ class VocabularyController extends ChangeNotifier {
     await prefs.setInt('daily_review_target', clamped);
   }
 
-  Future<bool> setReminderEnabled(bool enabled) async {
+  Future<ReminderScheduleResult> setReminderEnabled(bool enabled) async {
     if (enabled) {
-      final scheduled = await _notificationService.scheduleDailyReminder(
+      final result = await _notificationService.scheduleDailyReminder(
         hour: _settings.reminderHour,
         minute: _settings.reminderMinute,
         title: strings.notificationTitle,
         body: strings.notificationBody,
       );
-      if (!scheduled) {
-        return false;
+      if (result != ReminderScheduleResult.scheduled) {
+        return result;
       }
     } else {
       await _notificationService.cancelDailyReminder();
@@ -497,7 +619,7 @@ class VocabularyController extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('reminder_enabled', enabled);
-    return true;
+    return ReminderScheduleResult.scheduled;
   }
 
   Future<void> updateReminderTime(TimeOfDay time) async {

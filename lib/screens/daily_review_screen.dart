@@ -15,6 +15,8 @@ class DailyReviewScreen extends StatefulWidget {
 
 class _DailyReviewScreenState extends State<DailyReviewScreen> {
   late List<VocabularyWord> _sessionQueue;
+  late bool _isPractice;
+  final Set<int> _requeuedIds = {};
   int _currentIndex = 0;
   bool _answerRevealed = false;
   bool _isSaving = false;
@@ -22,21 +24,54 @@ class _DailyReviewScreenState extends State<DailyReviewScreen> {
   @override
   void initState() {
     super.initState();
-    _sessionQueue = widget.controller.buildReviewSessionQueue();
+    final session = widget.controller.buildReviewSession();
+    _sessionQueue = List.of(session.words);
+    _isPractice = session.isPractice;
+  }
+
+  void _startPracticeSession() {
+    final session = widget.controller.buildReviewSession(practice: true);
+    setState(() {
+      _sessionQueue = List.of(session.words);
+      _isPractice = session.isPractice;
+      _requeuedIds.clear();
+      _currentIndex = 0;
+      _answerRevealed = false;
+    });
+  }
+
+  VocabularyWord _resolveLatest(VocabularyWord word) {
+    if (word.id == null) return word;
+    for (final w in widget.controller.allWords) {
+      if (w.id == word.id) return w;
+    }
+    return word;
   }
 
   Future<void> _recordChoice(bool remembered) async {
     if (_isSaving || _currentIndex >= _sessionQueue.length) return;
     setState(() => _isSaving = true);
 
-    final currentWord = _sessionQueue[_currentIndex];
-    await widget.controller.recordWordReview(
+    final currentWord = _resolveLatest(_sessionQueue[_currentIndex]);
+    final saved = await widget.controller.recordWordReview(
       word: currentWord,
       remembered: remembered,
+      isPractice: _isPractice,
     );
 
     if (!mounted) return;
     setState(() {
+      // If forgotten and there are other cards after this one, bring the
+      // forgotten word back once at the end of the session so it returns
+      // sooner without showing the exact same card twice in a row.
+      final hasRemainingOtherCards = _currentIndex + 1 < _sessionQueue.length;
+      if (!remembered &&
+          hasRemainingOtherCards &&
+          saved.id != null &&
+          !_requeuedIds.contains(saved.id)) {
+        _requeuedIds.add(saved.id!);
+        _sessionQueue.add(saved);
+      }
       _isSaving = false;
       _answerRevealed = false;
       _currentIndex++;
@@ -53,6 +88,7 @@ class _DailyReviewScreenState extends State<DailyReviewScreen> {
     final reviewedToday = widget.controller.reviewedTodayCount;
 
     if (_sessionQueue.isEmpty) {
+      final hasSavedWords = widget.controller.totalWordsCount > 0;
       return Scaffold(
         appBar: AppBar(title: Text(strings.dailyReviewTitle)),
         body: Center(
@@ -62,23 +98,51 @@ class _DailyReviewScreenState extends State<DailyReviewScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  Icons.library_books_rounded,
+                  hasSavedWords
+                      ? Icons.task_alt_rounded
+                      : Icons.library_books_rounded,
                   size: 64,
                   color: colorScheme.primary.withValues(alpha: 0.5),
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  strings.noWordsToReview,
+                  hasSavedWords
+                      ? strings.allCaughtUpTitle
+                      : strings.noWordsToReview,
                   textAlign: TextAlign.center,
                   style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 24),
-                FilledButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: Text(strings.backToHome),
-                ),
+                if (hasSavedWords) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    strings.allCaughtUpSubtitle,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                      height: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  FilledButton.icon(
+                    key: const Key('start_practice_session_button'),
+                    onPressed: _startPracticeSession,
+                    icon: const Icon(Icons.play_arrow_rounded),
+                    label: Text(strings.startPracticeSession),
+                  ),
+                  const SizedBox(height: 10),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text(strings.backToHome),
+                  ),
+                ] else ...[
+                  const SizedBox(height: 24),
+                  FilledButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text(strings.backToHome),
+                  ),
+                ],
               ],
             ),
           ),
@@ -164,7 +228,7 @@ class _DailyReviewScreenState extends State<DailyReviewScreen> {
       );
     }
 
-    final word = _sessionQueue[_currentIndex];
+    final word = _resolveLatest(_sessionQueue[_currentIndex]);
     final sessionProgress = (_currentIndex + 1) / _sessionQueue.length;
     final hasArabic =
         word.arabicMeaning != null && word.arabicMeaning!.trim().isNotEmpty;

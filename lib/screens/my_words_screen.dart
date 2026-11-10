@@ -50,6 +50,7 @@ class _MyWordsScreenState extends State<MyWordsScreen> {
           strings.wordAddedToast(
             result.word.word,
             result.word.informationStatus,
+            isOffline: widget.controller.isOffline,
           ),
         ),
         behavior: SnackBarBehavior.floating,
@@ -199,6 +200,7 @@ class _MyWordsScreenState extends State<MyWordsScreen> {
                       return WordListTile(
                         word: word,
                         strings: strings,
+                        isEnriching: widget.controller.isEnriching(word.id),
                         onTap: () => _openWordDetails(word),
                         onPlayAudio: () =>
                             widget.controller.playPronunciation(word),

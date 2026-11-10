@@ -66,7 +66,18 @@ class DatabaseHelper {
 
     return openDatabase(
       dbPath,
-      version: 1,
+      version: 2,
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute(
+            'ALTER TABLE vocabulary_words ADD COLUMN streak INTEGER NOT NULL DEFAULT 0',
+          );
+          // Best approximation of the streak for words reviewed under v1.
+          await db.execute(
+            'UPDATE vocabulary_words SET streak = MAX(reviewCount - forgottenCount, 0)',
+          );
+        }
+      },
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE vocabulary_words (
@@ -87,6 +98,7 @@ class DatabaseHelper {
             nextReviewAt TEXT NOT NULL,
             reviewCount INTEGER NOT NULL DEFAULT 0,
             forgottenCount INTEGER NOT NULL DEFAULT 0,
+            streak INTEGER NOT NULL DEFAULT 0,
             isSynced INTEGER NOT NULL DEFAULT 0,
             informationStatus TEXT NOT NULL DEFAULT 'pending'
           )
@@ -216,23 +228,31 @@ class DatabaseHelper {
         break;
     }
 
+    final rows = await db.query('vocabulary_words', orderBy: orderBy);
+    final all = rows.map(VocabularyWord.fromMap).toList();
     if (trimmedQuery.isEmpty) {
-      final rows = await db.query('vocabulary_words', orderBy: orderBy);
-      return rows.map(VocabularyWord.fromMap).toList();
+      return all;
     }
 
-    final normalizedQuery = trimmedQuery.toLowerCase();
-    final likePattern = '%$normalizedQuery%';
-    final rawLikePattern = '%$trimmedQuery%';
+    final normalizedQuery = VocabularyWord.normalize(trimmedQuery);
+    final normalizedArabicQuery = VocabularyWord.normalizeArabic(trimmedQuery);
 
-    final rows = await db.query(
-      'vocabulary_words',
-      where:
-          'normalizedWord LIKE ? OR word LIKE ? OR COALESCE(arabicMeaning, \'\') LIKE ?',
-      whereArgs: [likePattern, rawLikePattern, rawLikePattern],
-      orderBy: orderBy,
-    );
-    return rows.map(VocabularyWord.fromMap).toList();
+    return all.where((w) {
+      if (w.normalizedWord.contains(normalizedQuery) ||
+          w.word.toLowerCase().contains(normalizedQuery)) {
+        return true;
+      }
+      final meaning = w.arabicMeaning;
+      if (meaning != null && meaning.isNotEmpty) {
+        if (meaning.contains(trimmedQuery) ||
+            VocabularyWord.normalizeArabic(
+              meaning,
+            ).contains(normalizedArabicQuery)) {
+          return true;
+        }
+      }
+      return false;
+    }).toList();
   }
 
   Future<List<VocabularyWord>> getPendingWords() async {
