@@ -4,6 +4,7 @@ import '../models/app_settings.dart';
 import '../models/vocabulary_word.dart';
 import '../state/vocabulary_controller.dart';
 import '../widgets/add_edit_word_sheet.dart';
+import '../widgets/brand_floating_add_button.dart';
 import '../widgets/word_list_tile.dart';
 import 'word_details_screen.dart';
 
@@ -81,14 +82,10 @@ class _MyWordsScreenState extends State<MyWordsScreen> {
     final currentSort = widget.controller.sortOrder;
 
     return Scaffold(
-      floatingActionButton: FloatingActionButton.extended(
+      floatingActionButton: BrandFloatingAddButton(
         key: const Key('my_words_fab_add'),
         onPressed: _openAddWord,
-        icon: const Icon(Icons.add_rounded),
-        label: Text(
-          strings.addButton,
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
+        label: strings.addNewWord,
       ),
       body: Column(
         children: [

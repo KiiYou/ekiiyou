@@ -41,7 +41,7 @@ class DictionaryLookupResult {
 /// Replaceable abstraction for dictionary + Arabic translation lookup.
 abstract class DictionaryService {
   Future<DictionaryLookupResult> lookupWord(String rawWord);
-  Future<String?> cacheAudioFile(String normalizedWord, String remoteUrl);
+  Future<String?> cacheAudioFile(String normalizedWord, String? remoteUrl);
 }
 
 class StandardDictionaryService implements DictionaryService {
@@ -143,7 +143,6 @@ class StandardDictionaryService implements DictionaryService {
     }
 
     Future<String?> fetchAudio() async {
-      if (audioRemoteUrl == null || audioRemoteUrl.trim().isEmpty) return null;
       return cacheAudioFile(normalized, audioRemoteUrl);
     }
 
@@ -323,7 +322,7 @@ class StandardDictionaryService implements DictionaryService {
   @override
   Future<String?> cacheAudioFile(
     String normalizedWord,
-    String remoteUrl,
+    String? remoteUrl,
   ) async {
     try {
       final String baseDirPath;
@@ -350,9 +349,32 @@ class StandardDictionaryService implements DictionaryService {
         return file.path;
       }
 
-      final response = await _client.get(Uri.parse(remoteUrl)).timeout(timeout);
-      if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
-        await file.writeAsBytes(response.bodyBytes, flush: true);
+      const audioTimeout = Duration(milliseconds: 3500);
+
+      // 1. Try primary dictionary audio URL if available
+      if (remoteUrl != null && remoteUrl.trim().isNotEmpty) {
+        try {
+          final response = await _client
+              .get(Uri.parse(remoteUrl.trim()))
+              .timeout(audioTimeout);
+          if (response.statusCode == 200 && response.bodyBytes.length > 256) {
+            await file.writeAsBytes(response.bodyBytes, flush: true);
+            return file.path;
+          }
+        } catch (_) {}
+      }
+
+      // 2. Fallback: high-reliability English TTS MP3 endpoint so every word
+      // has a cached offline MP3 file even when the dictionary has no audio.
+      final fallbackTtsUri = Uri.parse(
+        'https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=en&q=${Uri.encodeComponent(normalizedWord)}',
+      );
+      final fallbackResp = await _client
+          .get(fallbackTtsUri)
+          .timeout(audioTimeout);
+      if (fallbackResp.statusCode == 200 &&
+          fallbackResp.bodyBytes.length > 256) {
+        await file.writeAsBytes(fallbackResp.bodyBytes, flush: true);
         return file.path;
       }
     } catch (_) {

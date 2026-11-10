@@ -207,9 +207,14 @@ class AppStrings {
       isAr ? 'اللغة والمظهر' : 'Language & Appearance';
   String get appLanguageLabel => isAr ? 'لغة التطبيق' : 'Application Language';
   String get themeModeLabel => isAr ? 'المظهر' : 'Theme';
-  String get themeSystem => isAr ? 'تلقائي (حسب النظام)' : 'System Default';
+  String get themeSystem => isAr ? 'تلقائي' : 'System';
   String get themeLight => isAr ? 'فاتح' : 'Light';
   String get themeDark => isAr ? 'داكن' : 'Dark';
+  String get pasteFromClipboard =>
+      isAr ? 'لصق من الحافظة' : 'Paste from Clipboard';
+  String get dailyTargetSubtitle => isAr
+      ? 'عدد الكلمات التي تهدف لمراجعتها كل يوم'
+      : 'Number of words you aim to review each day';
 
   String get dataManagementSection =>
       isAr ? 'إدارة البيانات والنسخ الاحتياطي' : 'Data & Backup';

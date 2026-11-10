@@ -104,10 +104,47 @@ class VocabularyController extends ChangeNotifier {
     notifyListeners();
 
     if (enableConnectivityListener) {
+      _audioService.warmup();
       _setupConnectivityMonitoring();
+      _precacheMissingAudioFiles();
       if (_settings.reminderEnabled) {
         _reverifyReminderAtStartup();
       }
+    }
+  }
+
+  /// Silently downloads and caches local MP3 files for any previously saved
+  /// words that don't have a cached audio file yet.
+  Future<void> _precacheMissingAudioFiles() async {
+    if (_isOffline) return;
+    final missingAudio = _allWords
+        .where(
+          (w) =>
+              w.id != null &&
+              (w.audioLocalPath == null || w.audioLocalPath!.trim().isEmpty),
+        )
+        .toList();
+    if (missingAudio.isEmpty) return;
+
+    bool changed = false;
+    for (final w in missingAudio) {
+      if (_isOffline) break;
+      final cachedPath = await _dictionaryService.cacheAudioFile(
+        w.normalizedWord,
+        w.audioRemoteUrl,
+      );
+      if (cachedPath != null) {
+        final latest = await _dbHelper.getWordById(w.id!);
+        if (latest != null) {
+          await _dbHelper.updateWord(
+            latest.copyWith(audioLocalPath: cachedPath),
+          );
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      await refreshWords();
     }
   }
 
@@ -500,26 +537,34 @@ class VocabularyController extends ChangeNotifier {
     }
   }
 
-  /// Plays pronunciation audio (cached local file -> remote URL -> offline TTS fallback).
+  /// Plays pronunciation audio:
+  /// - Uses local cached MP3 immediately if present on disk.
+  /// - If no local MP3 exists yet and the device is online, quickly caches the
+  ///   MP3 (from dictionary URL or fallback TTS MP3) and plays it.
+  /// - Falls back to pre-warmed offline system TTS when offline.
   Future<bool> playPronunciation(VocabularyWord word) async {
-    // Also lazily cache the remote audio in the background if not yet cached locally
-    if ((word.audioLocalPath == null || word.audioLocalPath!.isEmpty) &&
-        word.audioRemoteUrl != null &&
-        word.audioRemoteUrl!.isNotEmpty &&
-        !_isOffline &&
-        word.id != null) {
-      _dictionaryService
-          .cacheAudioFile(word.normalizedWord, word.audioRemoteUrl!)
-          .then((cachedPath) async {
-            if (cachedPath != null) {
-              await _dbHelper.updateWord(
-                word.copyWith(audioLocalPath: cachedPath),
-              );
-              await refreshWords();
-            }
-          });
+    var targetWord = word;
+    if ((targetWord.audioLocalPath == null ||
+            targetWord.audioLocalPath!.trim().isEmpty) &&
+        !_isOffline) {
+      final cachedPath = await _dictionaryService.cacheAudioFile(
+        targetWord.normalizedWord,
+        targetWord.audioRemoteUrl,
+      );
+      if (cachedPath != null) {
+        targetWord = targetWord.copyWith(audioLocalPath: cachedPath);
+        if (targetWord.id != null) {
+          final latest = await _dbHelper.getWordById(targetWord.id!);
+          if (latest != null) {
+            await _dbHelper.updateWord(
+              latest.copyWith(audioLocalPath: cachedPath),
+            );
+            await refreshWords();
+          }
+        }
+      }
     }
-    return _audioService.playWordPronunciation(word);
+    return _audioService.playWordPronunciation(targetWord);
   }
 
   /// Builds the flashcards for a review session.

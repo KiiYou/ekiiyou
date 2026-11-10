@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
@@ -8,46 +9,71 @@ import '../models/vocabulary_word.dart';
 class AudioPronunciationService {
   AudioPlayer? _audioPlayer;
   FlutterTts? _tts;
-  bool _ttsInitialized = false;
+  Future<void>? _ttsInitFuture;
 
+  /// Pre-warms the Android/iOS Text-To-Speech engine and AudioPlayer at app
+  /// startup so the very first tap on the speaker button is instantaneous.
+  Future<void> warmup() async {
+    try {
+      _audioPlayer ??= AudioPlayer()..setReleaseMode(ReleaseMode.stop);
+    } catch (_) {}
+    await _ensureTtsReady();
+  }
+
+  Future<void> _ensureTtsReady() {
+    return _ttsInitFuture ??= _initTts();
+  }
+
+  Future<void> _initTts() async {
+    try {
+      final tts = FlutterTts();
+      _tts = tts;
+      await tts.awaitSpeakCompletion(false);
+      await tts.setLanguage('en-US');
+      await tts.setSpeechRate(0.46);
+      await tts.setPitch(1.0);
+      await tts.setVolume(1.0);
+    } catch (_) {
+      // Ignore on test/unsupported environments
+    }
+  }
+
+  /// Plays pronunciation immediately:
+  /// 1. If a cached local audio file already exists on disk, plays it right away.
+  /// 2. Otherwise (no local file yet), speaks immediately using the pre-warmed
+  ///    system TTS instead of blocking on a slow remote network stream.
   Future<bool> playWordPronunciation(VocabularyWord word) async {
-    // 1. Try cached local audio file first (offline-first)
-    if (word.audioLocalPath != null && word.audioLocalPath!.trim().isNotEmpty) {
+    // 1. Play from local disk cache if already downloaded (0 network latency)
+    final localPath = word.audioLocalPath;
+    if (localPath != null && localPath.trim().isNotEmpty) {
       try {
-        final file = File(word.audioLocalPath!);
-        if (await file.exists() && await file.length() > 0) {
-          _audioPlayer ??= AudioPlayer();
-          await _audioPlayer!.stop();
-          await _audioPlayer!.play(DeviceFileSource(file.path));
+        final file = File(localPath);
+        if (file.existsSync() && file.lengthSync() > 0) {
+          _audioPlayer ??= AudioPlayer()..setReleaseMode(ReleaseMode.stop);
+          await _tts?.stop();
+          await _audioPlayer!
+              .play(DeviceFileSource(file.path))
+              .timeout(const Duration(milliseconds: 1200));
           return true;
         }
-      } catch (_) {}
-    }
-
-    // 2. Try remote audio URL if available
-    if (word.audioRemoteUrl != null && word.audioRemoteUrl!.trim().isNotEmpty) {
-      try {
-        _audioPlayer ??= AudioPlayer();
-        await _audioPlayer!.stop();
-        await _audioPlayer!.play(UrlSource(word.audioRemoteUrl!));
-        return true;
-      } catch (_) {}
-    }
-
-    // 3. Fallback to offline system Text-To-Speech
-    try {
-      _tts ??= FlutterTts();
-      if (!_ttsInitialized) {
-        await _tts!.setLanguage('en-US');
-        await _tts!.setSpeechRate(0.45);
-        _ttsInitialized = true;
+      } catch (_) {
+        // Fall through immediately to TTS if the local file failed to play
       }
-      await _tts!.stop();
-      await _tts!.speak(word.word);
-      return true;
-    } catch (_) {
-      return false;
     }
+
+    // 2. Instant offline Text-To-Speech (never block on remote URL streaming!)
+    try {
+      await _ensureTtsReady().timeout(const Duration(milliseconds: 800));
+      final tts = _tts;
+      if (tts != null) {
+        await _audioPlayer?.stop();
+        await tts.stop();
+        await tts.speak(word.word);
+        return true;
+      }
+    } catch (_) {}
+
+    return false;
   }
 
   Future<void> dispose() async {

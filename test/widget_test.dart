@@ -47,7 +47,7 @@ class FakeTestDictionaryService implements DictionaryService {
   @override
   Future<String?> cacheAudioFile(
     String normalizedWord,
-    String remoteUrl,
+    String? remoteUrl,
   ) async {
     return null;
   }
